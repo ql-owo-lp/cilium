@@ -42,6 +42,7 @@
 #include "lib/events.h"
 #include "lib/nodeport.h"
 #include "lib/tailcall.h"
+#include "lib/geneve.h"
 
 #ifdef ENABLE_PREFILTER
 #ifdef CIDR4_FILTER
@@ -121,74 +122,21 @@ int tail_lb_ipv4(struct __ctx_buff *ctx)
 
 #if defined(ENABLE_DSR) && !defined(ENABLE_DSR_HYBRID) && DSR_ENCAP_MODE == DSR_ENCAP_GENEVE
 		{
-			int l4_off, inner_l2_off;
-			struct genevehdr geneve;
-			__sum16	udp_csum;
-			__be16 dport;
-			__u16 proto;
+			// Existing variables: l3_off, data, data_end, ip4 are already initialized.
+			// data, data_end, and ip4 are pointers to the current (outer) packet view.
+			// l3_off is the current L3 offset.
+			
+			int decap_ret = geneve_decap(ctx, &l3_off, &data, &data_end, &ip4);
 
-			if (ip4->protocol != IPPROTO_UDP)
-				goto no_encap;
-
-			/* Punt packets with IP options to TC */
-			if (ipv4_hdrlen(ip4) != sizeof(*ip4))
-				goto no_encap;
-
-			l4_off = l3_off + sizeof(*ip4);
-
-			if (l4_load_port(ctx, l4_off + UDP_DPORT_OFF, &dport) < 0) {
-				ret = DROP_INVALID;
+			if (decap_ret < 0) { // Error like DROP_INVALID
+				ret = decap_ret;
 				goto out;
 			}
-
-			if (dport != bpf_htons(TUNNEL_PORT))
+			if (decap_ret == DECAP_SKIPPED) { // DECAP_SKIPPED = 1
 				goto no_encap;
-
-			/* Cilium uses BPF_F_ZERO_CSUM_TX for its tunnel traffic.
-			 *
-			 * Adding LB support for checksummed packets would require
-			 * that we adjust udp->check
-			 * 1.	after DNAT of the inner packet,
-			 * 2.	after re-writing the outer headers and inserting
-			 *	the DSR option
-			 */
-			if (ctx_load_bytes(ctx, l4_off + offsetof(struct udphdr, check),
-					   &udp_csum, sizeof(udp_csum)) < 0) {
-				ret = DROP_INVALID;
-				goto out;
 			}
-
-			if (udp_csum != 0)
-				goto no_encap;
-
-			if (ctx_load_bytes(ctx, l4_off + sizeof(struct udphdr), &geneve,
-					   sizeof(geneve)) < 0) {
-				ret = DROP_INVALID;
-				goto out;
-			}
-
-			if (geneve.protocol_type != bpf_htons(ETH_P_TEB))
-				goto no_encap;
-
-			/* Punt packets with GENEVE options to TC */
-			if (geneve.opt_len)
-				goto no_encap;
-
-			inner_l2_off = l4_off + sizeof(struct udphdr) + sizeof(struct genevehdr);
-
-			/* point at the inner L3 header: */
-			if (!validate_ethertype_l2_off(ctx, inner_l2_off, &proto))
-				goto no_encap;
-
-			if (proto != bpf_htons(ETH_P_IP))
-				goto no_encap;
-
-			l3_off = inner_l2_off + ETH_HLEN;
-
-			if (!revalidate_data_l3_off(ctx, &data, &data_end, &ip4, l3_off)) {
-				ret = DROP_INVALID;
-				goto out;
-			}
+			// if decap_ret == DECAP_SUCCESS (0), l3_off, data, data_end, and ip4 are now updated
+			// and point to the inner packet. Processing continues.
 		}
 no_encap:
 #endif /* ENABLE_DSR && !ENABLE_DSR_HYBRID && DSR_ENCAP_MODE == DSR_ENCAP_GENEVE */

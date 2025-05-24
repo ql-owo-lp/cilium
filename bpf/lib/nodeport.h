@@ -28,6 +28,7 @@
 #include "proxy_hairpin.h"
 #include "fib.h"
 #include "srv6.h"
+#include "lib/geneve.h" // For geneve_encap4 and geneve_encap6
 
 DECLARE_CONFIG(__u16, device_mtu, "MTU of the device the bpf program is attached to (default: MTU set in node_config.h by agent)")
 ASSIGN_CONFIG(__u16, device_mtu, MTU)
@@ -416,26 +417,25 @@ static __always_inline int encap_geneve_dsr_opt6(struct __ctx_buff *ctx,
 		return DROP_FRAG_NEEDED;
 	}
 
-	if (need_opt)
-		return nodeport_add_tunnel_encap_opt(ctx,
-						     IPV4_DIRECT_ROUTING,
-						     src_port,
-						     info,
-						     WORLD_IPV6_ID,
-						     &gopt,
-						     sizeof(gopt),
-						     (enum trace_reason)CT_NEW,
-						     TRACE_PAYLOAD_LEN,
-						     ifindex);
+	// Parameters for geneve_encap4/6
+	enum trace_reason current_trace_reason = (enum trace_reason)CT_NEW;
+	__u32 current_monitor = TRACE_PAYLOAD_LEN;
 
-	return nodeport_add_tunnel_encap(ctx,
-					 IPV4_DIRECT_ROUTING,
-					 src_port,
-					 info,
-					 WORLD_IPV6_ID,
-					 (enum trace_reason)CT_NEW,
-					 TRACE_PAYLOAD_LEN,
-					 ifindex);
+	if (need_opt) {
+		return geneve_encap6(ctx, ip6, src_port,
+				     true, // needs_options
+				     &gopt, sizeof(gopt),
+				     info,
+				     current_trace_reason, current_monitor,
+				     ifindex, ohead);
+	} else {
+		return geneve_encap6(ctx, ip6, src_port,
+				     false, // needs_options
+				     NULL, 0, // no options
+				     info,
+				     current_trace_reason, current_monitor,
+				     ifindex, ohead);
+	}
 }
 #endif /* DSR_ENCAP_MODE */
 
@@ -1784,26 +1784,25 @@ static __always_inline int encap_geneve_dsr_opt4(struct __ctx_buff *ctx, int l3_
 	}
 #endif
 
-	if (need_opt)
-		return nodeport_add_tunnel_encap_opt(ctx,
-						     IPV4_DIRECT_ROUTING,
-						     src_port,
-						     info,
-						     src_sec_identity,
-						     &gopt,
-						     sizeof(gopt),
-						     (enum trace_reason)CT_NEW,
-						     TRACE_PAYLOAD_LEN,
-						     ifindex);
+	// Parameters for geneve_encap4/6
+	enum trace_reason current_trace_reason = (enum trace_reason)CT_NEW;
+	__u32 current_monitor = TRACE_PAYLOAD_LEN;
 
-	return nodeport_add_tunnel_encap(ctx,
-					 IPV4_DIRECT_ROUTING,
-					 src_port,
-					 info,
-					 src_sec_identity,
-					 (enum trace_reason)CT_NEW,
-					 TRACE_PAYLOAD_LEN,
-					 ifindex);
+	if (need_opt) {
+		return geneve_encap4(ctx, ip4,
+				     true, // needs_options
+				     &gopt, sizeof(gopt),
+				     info,
+				     current_trace_reason, current_monitor,
+				     ifindex, ohead);
+	} else {
+		return geneve_encap4(ctx, ip4,
+				     false, // needs_options
+				     NULL, 0, // no options
+				     info,
+				     current_trace_reason, current_monitor,
+				     ifindex, ohead);
+	}
 }
 #endif /* DSR_ENCAP_MODE */
 
