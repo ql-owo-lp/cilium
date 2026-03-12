@@ -65,7 +65,7 @@ sphinxcontrib-jquery==4.1
 sphinxcontrib-jsmath==1.0.1
 sphinxcontrib-qthelp==2.0.0
 sphinxcontrib-serializinghtml==2.0.0
-tornado==6.5.4
+tornado==6.5.5
 typer==0.23.1
 typing-inspection==0.4.2
 typing_extensions==4.15.0
