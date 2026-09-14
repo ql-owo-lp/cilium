@@ -29,7 +29,7 @@ charset-normalizer==3.4.9
 colorama==0.4.6
 deepmerge==2.1.0
 docutils==0.22.4
-idna==3.18
+idna==3.19
 imagesize==2.0.0
 Jinja2==3.1.6
 jsonschema==4.26.0
@@ -65,7 +65,7 @@ sphinxcontrib-jquery==4.1
 sphinxcontrib-jsmath==1.0.1
 sphinxcontrib-qthelp==2.0.0
 sphinxcontrib-serializinghtml==2.0.0
-tornado==6.5.7
+tornado==6.5.8
 typer==0.27.1
 typing-inspection==0.4.2
 typing_extensions==4.16.0
