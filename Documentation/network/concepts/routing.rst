@@ -90,6 +90,16 @@ The following options can be used to configure encapsulation:
   are enabled. The underlying network must support that protocol.
 * ``tunnel-port``: Set the port for the encapsulation protocol. Defaults
   to ``8472`` for ``vxlan`` and ``6081`` for ``geneve``.
+* ``enable-bpf-geneve``: Enable the :ref:`bpf_geneve_datapath` (beta), which
+  performs Geneve encapsulation and decapsulation in eBPF instead of the kernel
+  ``cilium_geneve`` device. Requires ``tunnel-protocol=geneve`` and Linux 5.13
+  or newer (6.3 or newer in dual-stack clusters), defaults to ``false``. The
+  corresponding Helm value is ``bpf.geneve.enabled``.
+* ``geneve-inner-protocol``: Set the inner protocol of the
+  :ref:`bpf_geneve_datapath` to ``eth`` or ``ip``, defaults to ``eth``. ``ip``
+  must be used on all nodes and requires ``BPF_F_ADJ_ROOM_DECAP_L4_UDP``
+  support in the kernel (Linux bpf-next, not in a released kernel as of
+  October 2026). The corresponding Helm value is ``bpf.geneve.innerProtocol``.
 
 .. _arch_direct_routing:
 .. _native_routing:
