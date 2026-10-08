@@ -122,6 +122,12 @@ type Node struct {
 	TracePayloadLenOverlay uint32 `config:"trace_payload_len_overlay"`
 	// The IP option type to use for packet tracing.
 	TracingIPOptionType uint8 `config:"tracing_ip_option_type"`
+	// Highest UDP source port for BPF Geneve encapsulation (low = high = 0 selects
+	// 1-65535).
+	TunnelSrcPortHigh uint16 `config:"tunnel_src_port_high"`
+	// Lowest UDP source port for BPF Geneve encapsulation (low = high = 0 selects
+	// 1-65535).
+	TunnelSrcPortLow uint16 `config:"tunnel_src_port_low"`
 }
 
 func NewNode() *Node {
@@ -142,5 +148,5 @@ func NewNode() *Node {
 		cast[types.V6Addr]([]byte{0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0}),
 		cast[types.V4Addr]([]byte{0x0, 0x0, 0x0, 0x0}),
 		cast[types.V6Addr]([]byte{0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0}),
-		false, false, 0x0, 0x0, 0x0}
+		false, false, 0x0, 0x0, 0x0, 0x0, 0x0}
 }

@@ -40,6 +40,7 @@ func LoadMapSpecs() (map[string]*ebpf.MapSpec, error) {
 const (
 	CiliumCallPolicy                    = "cilium_call_policy"
 	CiliumCalls                         = "cilium_calls"
+	CiliumCallsBPFOverlay               = "cilium_calls_bpf_overlay"
 	CiliumCIDRV4Dyn                     = "cilium_cidr_v4_dyn"
 	CiliumCIDRV4Fix                     = "cilium_cidr_v4_fix"
 	CiliumCIDRV6Dyn                     = "cilium_cidr_v6_dyn"
@@ -54,6 +55,7 @@ const (
 	CiliumEgresscallPolicy              = "cilium_egresscall_policy"
 	CiliumEncryptState                  = "cilium_encrypt_state"
 	CiliumEvents                        = "cilium_events"
+	CiliumGeneveMeta                    = "cilium_geneve_meta"
 	CiliumIPCacheV2                     = "cilium_ipcache_v2"
 	CiliumIPMasqV4                      = "cilium_ipmasq_v4"
 	CiliumIPMasqV6                      = "cilium_ipmasq_v6"
@@ -143,9 +145,21 @@ func newCiliumCallsSpec(btf *btf.Spec) *ebpf.MapSpec {
 		Type:       ebpf.ProgramArray,
 		KeySize:    4,
 		ValueSize:  4,
-		MaxEntries: 50,
+		MaxEntries: 54,
 		Flags:      0,
 		Pinning:    ebpf.PinType(16),
+	}
+}
+
+func newCiliumCallsBPFOverlaySpec(btf *btf.Spec) *ebpf.MapSpec {
+	return &ebpf.MapSpec{
+		Name:       CiliumCallsBPFOverlay,
+		Type:       ebpf.ProgramArray,
+		KeySize:    4,
+		ValueSize:  4,
+		MaxEntries: 2,
+		Flags:      0,
+		Pinning:    ebpf.PinByName,
 	}
 }
 
@@ -338,6 +352,20 @@ func newCiliumEventsSpec(btf *btf.Spec) *ebpf.MapSpec {
 		KeySize:    4,
 		ValueSize:  4,
 		MaxEntries: 0,
+		Flags:      0,
+		Pinning:    ebpf.PinByName,
+	}
+}
+
+func newCiliumGeneveMetaSpec(btf *btf.Spec) *ebpf.MapSpec {
+	return &ebpf.MapSpec{
+		Name:       CiliumGeneveMeta,
+		Type:       ebpf.PerCPUArray,
+		KeySize:    4,
+		Key:        anyTypeByName(btf, "__u32"),
+		ValueSize:  300,
+		Value:      anyTypeByName(btf, "geneve_metadata"),
+		MaxEntries: 2,
 		Flags:      0,
 		Pinning:    ebpf.PinByName,
 	}
@@ -1283,6 +1311,7 @@ func newCiliumXDPScratchSpec(btf *btf.Spec) *ebpf.MapSpec {
 var _outer []newMapFn = []newMapFn{
 	newCiliumCallPolicySpec,
 	newCiliumCallsSpec,
+	newCiliumCallsBPFOverlaySpec,
 	newCiliumCIDRV4DynSpec,
 	newCiliumCIDRV4FixSpec,
 	newCiliumCIDRV6DynSpec,
@@ -1297,6 +1326,7 @@ var _outer []newMapFn = []newMapFn{
 	newCiliumEgresscallPolicySpec,
 	newCiliumEncryptStateSpec,
 	newCiliumEventsSpec,
+	newCiliumGeneveMetaSpec,
 	newCiliumIPCacheV2Spec,
 	newCiliumIPMasqV4Spec,
 	newCiliumIPMasqV6Spec,

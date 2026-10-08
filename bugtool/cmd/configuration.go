@@ -75,8 +75,10 @@ func cgroup2fsMounts() []string {
 var bpfMapsPath = []string{
 	"tc/globals/cilium_call_policy",
 	"tc/globals/cilium_calls_overlay_2",
+	"tc/globals/cilium_calls_bpf_overlay",
 	"tc/globals/cilium_calls_wireguard*",
 	"tc/globals/cilium_calls_xdp*",
+	"tc/globals/cilium_geneve_meta",
 	"tc/globals/cilium_runtime_config",
 	"tc/globals/cilium_lxc",
 	"tc/globals/cilium_metrics",

@@ -122,6 +122,7 @@ cilium-agent [flags]
       --enable-bgp-control-plane-status-report                    Enable the BGP control plane status reporting (default true)
       --enable-bgp-legacy-origin-attribute                        Enable LoadBalancerIP routes to be advertised with BGP Origin Attribute set to INCOMPLETE
       --enable-bpf-clock-probe                                    Enable BPF clock source probing for more efficient tick retrieval
+      --enable-bpf-geneve                                         Enable the native BPF Geneve datapath instead of the kernel Geneve device (beta). Requires --tunnel-protocol=geneve and Linux >= 5.13 (>= 6.3 when pod and underlay IP families differ; see --geneve-inner-protocol for "ip"). Over an IPv6 underlay the outer UDP checksum is zero (RFC 6935/6936), which Cilium's cilium_geneve device accepts; other Geneve endpoints must allow it (udp6zerocsumrx)
       --enable-bpf-masquerade                                     Masquerade packets from endpoints leaving the host with BPF instead of iptables
       --enable-bpf-stats                                          Enable BPF statistics collection
       --enable-bpf-tproxy                                         Enable BPF-based proxy redirection (beta), if support available
@@ -232,6 +233,7 @@ cilium-agent [flags]
       --external-envoy-proxy                                      whether the Envoy is deployed externally in form of a DaemonSet or not
       --force-device-detection                                    Forces the auto-detection of devices, even if specific devices are explicitly listed
       --gateway-api-secrets-namespace string                      GatewayAPISecretsNamespace is the namespace having tls secrets used by CEC, originating from Gateway API
+      --geneve-inner-protocol string                              Inner protocol carried in Geneve frames by the native BPF Geneve datapath ("eth" for Ethernet/TEB, wire-compatible with the kernel Geneve device, or "ip" for IPv4/IPv6 without inner Ethernet header). "ip" requires --enable-bpf-geneve and "ip" on all nodes, and bpf_skb_adjust_room() support for BPF_F_ADJ_ROOM_DECAP_L4_UDP (Linux bpf-next commit ec20dee2f2c4, not in a released kernel as of 2026-10) (default "eth")
       --gops-port uint16                                          Port for gops server to listen on (default 9890)
       --health-check-icmp-failure-threshold int                   Number of ICMP requests sent for each run of the health checker. If at least one ICMP response is received, the node or endpoint is marked as healthy. (default 3)
   -h, --help                                                      help for cilium-agent

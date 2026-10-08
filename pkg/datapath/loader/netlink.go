@@ -201,6 +201,12 @@ func setupGeneveDevice(logger *slog.Logger, sysctl sysctl.Sysctl, dport, srcPort
 		srcPortHigh = math.MaxUint16
 	}
 
+	// The native BPF Geneve datapath emits a zero UDP checksum over IPv6
+	// (RFC 6935/6936). No attribute is needed for this device to accept such
+	// packets: it is an external (collect_md) device without a fixed IPv6
+	// remote, so the kernel leaves use_udp6_rx_checksums off (udp6zerocsumrx).
+	// geneve_newlink() defaults it to false and geneve_nl2info() only turns it
+	// on when IFLA_GENEVE_REMOTE6 is set, see drivers/net/geneve.c.
 	dev := &netlink.Geneve{
 		LinkAttrs: netlink.LinkAttrs{
 			Name:         defaults.GeneveDevice,

@@ -444,33 +444,68 @@ var HaveNetkitTunableBufferMargins = sync.OnceValue(func() error {
 // the mode is unknown. Otherwise it should resize the SKB by 20 bytes and return 0.
 func HaveSKBAdjustRoomL2RoomMACSupport(logger *slog.Logger) (err error) {
 	defer func() {
-		if err != nil && !errors.Is(err, ebpf.ErrNotSupported) {
+		if err != nil && !errors.Is(err, ebpf.ErrNotSupported) && !errors.Is(err, ErrNotSupported) {
 			logging.Fatal(logger, "failed to probe for bpf_skb_adjust_room L2 room MAC support", logfields.Error, err)
 		}
 	}()
 
-	progSpec := &ebpf.ProgramSpec{
-		Name:    "adjust_mac_room",
-		Type:    ebpf.SchedCLS,
-		License: "GPL",
-	}
-	progSpec.Instructions = asm.Instructions{
-		asm.Mov.Imm(asm.R2, 20), // len_diff
-		asm.Mov.Imm(asm.R3, 1),  // mode: BPF_ADJ_ROOM_MAC
-		asm.Mov.Imm(asm.R4, 0),  // flags: 0
-		asm.FnSkbAdjustRoom.Call(),
-		asm.Return(),
-	}
-	prog, err := ebpf.NewProgram(progSpec)
-	if err != nil {
-		return err
-	}
-	defer prog.Close()
+	return haveSKBAdjustRoomFlags("adjust_mac_room", 20, 0)
+}
 
+// HaveSKBAdjustRoomEncapL2Eth tests whether bpf_skb_adjust_room accepts
+// BPF_F_ADJ_ROOM_ENCAP_L2_ETH (Linux 5.13), which the native BPF Geneve
+// datapath needs to encapsulate pod traffic as Ethernet-over-Geneve while
+// keeping the inner headers and UDP tunnel GSO intact.
+var HaveSKBAdjustRoomEncapL2Eth = sync.OnceValue(func() error {
+	const innerMACLen = 14 // ETH_HLEN
+
+	return haveSKBAdjustRoomFlags("adjust_room_encap_l2_eth", innerMACLen,
+		unix.BPF_F_ADJ_ROOM_FIXED_GSO|unix.BPF_F_ADJ_ROOM_NO_CSUM_RESET|
+			unix.BPF_F_ADJ_ROOM_ENCAP_L3_IPV4|unix.BPF_F_ADJ_ROOM_ENCAP_L4_UDP|
+			unix.BPF_F_ADJ_ROOM_ENCAP_L2_ETH|
+			innerMACLen<<unix.BPF_ADJ_ROOM_ENCAP_L2_SHIFT)
+})
+
+// HaveSKBAdjustRoomDecapL3 tests whether bpf_skb_adjust_room accepts
+// BPF_F_ADJ_ROOM_DECAP_L3_IPV4 (Linux 6.3, together with its IPv6 twin), which
+// the native BPF Geneve datapath needs to decapsulate a packet whose inner IP
+// family differs from the outer one.
+var HaveSKBAdjustRoomDecapL3 = sync.OnceValue(func() error {
+	const ipv4HdrLen = 20 // sizeof(struct iphdr)
+
+	return haveSKBAdjustRoomFlags("adjust_room_decap_l3", -ipv4HdrLen,
+		unix.BPF_F_ADJ_ROOM_FIXED_GSO|unix.BPF_F_ADJ_ROOM_NO_CSUM_RESET|
+			unix.BPF_F_ADJ_ROOM_DECAP_L3_IPV4)
+})
+
+// bpfFAdjRoomDecapL4UDP is BPF_F_ADJ_ROOM_DECAP_L4_UDP, added to the UAPI by
+// bpf-next commit da199070bc62 ("bpf: Add BPF_F_ADJ_ROOM_DECAP_* flags for
+// tunnel decapsulation"). golang.org/x/sys/unix does not define it yet.
+const bpfFAdjRoomDecapL4UDP = 1 << 10
+
+// HaveSKBAdjustRoomDecapL4UDP tests whether bpf_skb_adjust_room accepts
+// BPF_F_ADJ_ROOM_DECAP_L4_UDP, with which the helper clears the UDP tunnel GSO
+// state of a packet whose outer UDP encapsulation it removes (bpf-next commit
+// ec20dee2f2c4, not in a released kernel as of 2026-10). The native BPF Geneve
+// datapath needs it with the "ip" inner protocol to decapsulate the GSO
+// packets that GRO builds from Geneve traffic.
+var HaveSKBAdjustRoomDecapL4UDP = sync.OnceValue(func() error {
+	return haveSKBAdjustRoomGeneveDecap("adjust_room_decap_l4_udp",
+		unix.BPF_F_ADJ_ROOM_FIXED_GSO|unix.BPF_F_ADJ_ROOM_NO_CSUM_RESET|
+			bpfFAdjRoomDecapL4UDP)
+})
+
+// haveSKBAdjustRoomFlags runs a SchedCLS program calling
+// bpf_skb_adjust_room(skb, lenDiff, BPF_ADJ_ROOM_MAC, flags) on an
+// Ethernet/IPv4/UDP packet and returns ErrNotSupported if the helper fails.
+// The verifier does not validate the mode or flags arguments, so unsupported
+// values can only be detected at runtime, through BPF_PROG_TEST_RUN: the
+// helper returns -EINVAL for unknown flag bits and -ENOTSUPP for unknown modes.
+func haveSKBAdjustRoomFlags(name string, lenDiff int32, flags uint64) error {
 	// This is a Eth + IPv4 + UDP + data packet. The helper relies on a valid packet being passed in
 	// since it wants to know offsets of the different layers.
 	buf := gopacket.NewSerializeBuffer()
-	err = gopacket.SerializeLayers(buf, gopacket.SerializeOptions{},
+	err := gopacket.SerializeLayers(buf, gopacket.SerializeOptions{},
 		&layers.Ethernet{
 			DstMAC:       net.HardwareAddr{0xff, 0xff, 0xff, 0xff, 0xff, 0xff},
 			SrcMAC:       net.HardwareAddr{0x0e, 0xf5, 0x16, 0x3d, 0x6b, 0xab},
@@ -496,12 +531,87 @@ func HaveSKBAdjustRoomL2RoomMACSupport(logger *slog.Logger) (err error) {
 		return fmt.Errorf("craft packet: %w", err)
 	}
 
-	ret, _, err := prog.Test(buf.Bytes())
+	return runSKBAdjustRoom(name, lenDiff, flags, buf.Bytes())
+}
+
+// haveSKBAdjustRoomGeneveDecap is like haveSKBAdjustRoomFlags, but removes the
+// outer IPv4, UDP and Geneve headers of an IPv4-in-Geneve packet without inner
+// Ethernet header, as the native BPF Geneve datapath does with the "ip" inner
+// protocol. The packet of haveSKBAdjustRoomFlags is too short for this: the
+// helper rejects a shrink that leaves less than an IPv4 header behind the
+// Ethernet header.
+func haveSKBAdjustRoomGeneveDecap(name string, flags uint64) error {
+	const outerHdrLen = 20 + 8 + 8 // IPv4 + UDP + Geneve headers, no options
+
+	buf := gopacket.NewSerializeBuffer()
+	err := gopacket.SerializeLayers(buf, gopacket.SerializeOptions{FixLengths: true},
+		&layers.Ethernet{
+			DstMAC:       net.HardwareAddr{0x0e, 0xf5, 0x16, 0x3d, 0x6b, 0xac},
+			SrcMAC:       net.HardwareAddr{0x0e, 0xf5, 0x16, 0x3d, 0x6b, 0xab},
+			EthernetType: layers.EthernetTypeIPv4,
+		},
+		&layers.IPv4{
+			Version:  4,
+			TTL:      64,
+			Protocol: layers.IPProtocolUDP,
+			SrcIP:    net.IPv4(0xc0, 0xa8, 0xb2, 0x56),
+			DstIP:    net.IPv4(0xc0, 0xa8, 0xb2, 0x57),
+		},
+		&layers.UDP{
+			SrcPort: 49152,
+			DstPort: 6081, // Geneve
+		},
+		&layers.Geneve{
+			Protocol: layers.EthernetTypeIPv4,
+			VNI:      2,
+		},
+		&layers.IPv4{
+			Version:  4,
+			TTL:      64,
+			Protocol: layers.IPProtocolUDP,
+			SrcIP:    net.IPv4(10, 0, 0, 1),
+			DstIP:    net.IPv4(10, 0, 1, 1),
+		},
+		&layers.UDP{
+			SrcPort: 23939,
+			DstPort: 32412,
+		},
+		gopacket.Payload("M-SEARCH * HTTP/1.1\x0d\x0a"),
+	)
+	if err != nil {
+		return fmt.Errorf("craft packet: %w", err)
+	}
+
+	return runSKBAdjustRoom(name, -outerHdrLen, flags, buf.Bytes())
+}
+
+// runSKBAdjustRoom runs bpf_skb_adjust_room(skb, lenDiff, BPF_ADJ_ROOM_MAC,
+// flags) on pkt, see haveSKBAdjustRoomFlags.
+func runSKBAdjustRoom(name string, lenDiff int32, flags uint64, pkt []byte) error {
+	progSpec := &ebpf.ProgramSpec{
+		Name:    name,
+		Type:    ebpf.SchedCLS,
+		License: "GPL",
+		Instructions: asm.Instructions{
+			asm.Mov.Imm(asm.R2, lenDiff),                 // len_diff
+			asm.Mov.Imm(asm.R3, unix.BPF_ADJ_ROOM_MAC),   // mode
+			asm.LoadImm(asm.R4, int64(flags), asm.DWord), // flags
+			asm.FnSkbAdjustRoom.Call(),
+			asm.Return(),
+		},
+	}
+	prog, err := ebpf.NewProgram(progSpec)
+	if err != nil {
+		return err
+	}
+	defer prog.Close()
+
+	ret, _, err := prog.Test(pkt)
 	if err != nil {
 		return err
 	}
 	if ret != 0 {
-		return ebpf.ErrNotSupported
+		return ErrNotSupported
 	}
 	return nil
 }

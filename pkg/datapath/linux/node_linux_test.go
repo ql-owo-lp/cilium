@@ -82,7 +82,7 @@ func setupNodeSuite(tb testing.TB, addressing node.Addressing, enableIPv6, enabl
 
 	rlimit.RemoveMemlock()
 
-	mtuConfig := mtu.NewConfiguration(0, false, false, false, false)
+	mtuConfig := mtu.NewConfiguration(0, false, false, false, false, false)
 	s := &nodeSuite{
 		ns:         netns.NewNetNS(tb),
 		sysctl:     sysctl.NewDirectSysctl(afero.NewOsFs(), "/proc"),

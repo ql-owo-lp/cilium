@@ -1,0 +1,36 @@
+- name: 'bpf-geneve-1'
+  kernel: '6.18'
+  kube-proxy: 'none'
+  kpr: 'true'
+  devices: '{eth0,eth1}'
+  secondary-network: 'true'
+  tunnel: 'geneve'
+  # IPv6 underlay with dual stack: native decapsulation of IPv4 pod traffic
+  # from IPv6 Geneve packets, and kernel Geneve devices accepting the zero
+  # outer UDP checksum of natively encapsulated packets.
+  underlay: 'ipv6'
+  lb-mode: 'dsr'
+  host-fw: 'true'
+  # Releases without the native datapath ignore bpf.geneve.*, so during the
+  # upgrade and downgrade each node switches between the kernel Geneve device
+  # and the native datapath when its agent is replaced.
+  misc: 'bpfClockProbe=false,cni.uninstall=false,bpf.geneve.enabled=true,loadBalancer.dsrDispatch=geneve'
+  # L7 testing: Native BPF Geneve over IPv6 underlay - L3/L4 datapath, can skip
+  test-l7: 'false'
+- name: 'bpf-geneve-2'
+  kernel: '6.12'
+  kube-proxy: 'none'
+  kpr: 'true'
+  devices: '{eth0,eth1}'
+  secondary-network: 'true'
+  tunnel: 'geneve'
+  lb-mode: 'snat'
+  encryption: 'wireguard'
+  # Natively encapsulated packets must leave through WireGuard: with strict
+  # ingress the receiving node drops those that arrive unencrypted. Strict
+  # egress is combined with it as in wireguard-6.
+  encryption-strict-ingress: 'true'
+  encryption-strict-egress: 'true'
+  misc: 'bpfClockProbe=false,cni.uninstall=false,bpf.geneve.enabled=true'
+  # L7 testing: Native BPF Geneve + WireGuard - L3/L4 datapath, can skip
+  test-l7: 'false'

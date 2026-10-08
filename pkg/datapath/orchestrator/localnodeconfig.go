@@ -226,6 +226,8 @@ func newLocalNodeConfig(
 		RequiresNativeRouting:        daemon.RequiresNativeRouting(),
 		TunnelProtocol:               tunnelCfg.EncapProtocol().ToDpID(),
 		TunnelPort:                   tunnelCfg.Port(),
+		TunnelSrcPortLow:             tunnelCfg.SrcPortLow(),
+		TunnelSrcPortHigh:            tunnelCfg.SrcPortHigh(),
 		EnableAutoDirectRouting:      daemon.EnableAutoDirectRouting,
 		EphemeralMin:                 uint16(ephemeralMin),
 		DirectRoutingSkipUnreachable: daemon.DirectRoutingSkipUnreachable,

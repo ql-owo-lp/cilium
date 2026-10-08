@@ -658,6 +658,14 @@ const (
 	// be evaluated. Split from DROP_FRAG_NOT_FOUND to distinguish ambient
 	// external fragments from in-cluster fragment-tracking bugs.
 	DropReason_DROP_FRAG_NOT_FOUND_WORLD DropReason = 207
+	// The BPF Geneve datapath received a packet with a malformed Geneve
+	// header.
+	DropReason_DROP_GENEVE_HDR_INVALID DropReason = 208
+	// The BPF Geneve datapath received a packet with a malformed or
+	// unsupported Geneve option.
+	DropReason_DROP_GENEVE_OPT_INVALID DropReason = 209
+	// The BPF Geneve datapath failed to encapsulate a packet.
+	DropReason_DROP_GENEVE_ENCAP_FAILED DropReason = 210
 )
 
 // Enum value maps for DropReason.
@@ -740,6 +748,9 @@ var (
 		204: "DROP_NO_EGRESS_IP",
 		205: "DROP_PUNT_PROXY",
 		207: "DROP_FRAG_NOT_FOUND_WORLD",
+		208: "DROP_GENEVE_HDR_INVALID",
+		209: "DROP_GENEVE_OPT_INVALID",
+		210: "DROP_GENEVE_ENCAP_FAILED",
 	}
 	DropReason_value = map[string]int32{
 		"DROP_REASON_UNKNOWN":                                   0,
@@ -819,6 +830,9 @@ var (
 		"DROP_NO_EGRESS_IP":                                     204,
 		"DROP_PUNT_PROXY":                                       205,
 		"DROP_FRAG_NOT_FOUND_WORLD":                             207,
+		"DROP_GENEVE_HDR_INVALID":                               208,
+		"DROP_GENEVE_OPT_INVALID":                               209,
+		"DROP_GENEVE_ENCAP_FAILED":                              210,
 	}
 )
 
@@ -5960,7 +5974,7 @@ const file_flow_flow_proto_rawDesc = "" +
 	"\n" +
 	"\x06TRACED\x10\x06\x12\x0e\n" +
 	"\n" +
-	"TRANSLATED\x10\a*\xe9\x11\n" +
+	"TRANSLATED\x10\a*\xc4\x12\n" +
 	"\n" +
 	"DropReason\x12\x17\n" +
 	"\x13DROP_REASON_UNKNOWN\x10\x00\x12\x1b\n" +
@@ -6042,7 +6056,10 @@ const file_flow_flow_proto_rawDesc = "" +
 	"\x11DROP_EP_NOT_READY\x10\xcb\x01\x12\x16\n" +
 	"\x11DROP_NO_EGRESS_IP\x10\xcc\x01\x12\x14\n" +
 	"\x0fDROP_PUNT_PROXY\x10\xcd\x01\x12\x1e\n" +
-	"\x19DROP_FRAG_NOT_FOUND_WORLD\x10\xcf\x01*J\n" +
+	"\x19DROP_FRAG_NOT_FOUND_WORLD\x10\xcf\x01\x12\x1c\n" +
+	"\x17DROP_GENEVE_HDR_INVALID\x10\xd0\x01\x12\x1c\n" +
+	"\x17DROP_GENEVE_OPT_INVALID\x10\xd1\x01\x12\x1d\n" +
+	"\x18DROP_GENEVE_ENCAP_FAILED\x10\xd2\x01*J\n" +
 	"\x10TrafficDirection\x12\x1d\n" +
 	"\x19TRAFFIC_DIRECTION_UNKNOWN\x10\x00\x12\v\n" +
 	"\aINGRESS\x10\x01\x12\n" +

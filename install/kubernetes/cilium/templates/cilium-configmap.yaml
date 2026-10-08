@@ -596,6 +596,13 @@ data:
 {{- if .Values.underlayProtocol }}
   underlay-protocol: {{ .Values.underlayProtocol | quote }}
 {{- end }}
+{{- if .Values.bpf.geneve.enabled }}
+  {{- if ne (.Values.tunnelProtocol | default "vxlan") "geneve" }}
+    {{- fail "bpf.geneve.enabled requires tunnelProtocol=geneve" }}
+  {{- end }}
+  enable-bpf-geneve: "true"
+  geneve-inner-protocol: {{ .Values.bpf.geneve.innerProtocol | default "eth" | quote }}
+{{- end }}
 
 {{- if .Values.serviceNoBackendResponse }}
   service-no-backend-response: "{{ .Values.serviceNoBackendResponse }}"

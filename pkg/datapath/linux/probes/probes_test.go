@@ -10,6 +10,8 @@ import (
 
 	"github.com/cilium/hive/hivetest"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/unix"
 
 	"github.com/cilium/cilium/pkg/testutils"
 )
@@ -68,6 +70,52 @@ func TestPrivilegedSKBAdjustRoomL2RoomMACSupportProbe(t *testing.T) {
 	testutils.PrivilegedTest(t)
 	testutils.SkipOnOldKernel(t, "5.2", "BPF_ADJ_ROOM_MAC mode support in bpf_skb_adjust_room")
 	assert.NoError(t, HaveSKBAdjustRoomL2RoomMACSupport(hivetest.Logger(t)))
+}
+
+func TestPrivilegedHaveSKBAdjustRoomEncapL2Eth(t *testing.T) {
+	testutils.PrivilegedTest(t)
+	testutils.SkipOnOldKernel(t, "5.13", "BPF_F_ADJ_ROOM_ENCAP_L2_ETH support in bpf_skb_adjust_room")
+	assert.NoError(t, HaveSKBAdjustRoomEncapL2Eth())
+}
+
+func TestPrivilegedHaveSKBAdjustRoomDecapL3(t *testing.T) {
+	testutils.PrivilegedTest(t)
+	testutils.SkipOnOldKernel(t, "6.3", "BPF_F_ADJ_ROOM_DECAP_L3_IPV4 support in bpf_skb_adjust_room")
+	assert.NoError(t, HaveSKBAdjustRoomDecapL3())
+}
+
+func TestPrivilegedHaveSKBAdjustRoomFlagsUnsupported(t *testing.T) {
+	testutils.PrivilegedTest(t)
+	testutils.SkipOnOldKernel(t, "5.2", "BPF_ADJ_ROOM_MAC mode support in bpf_skb_adjust_room")
+
+	// A flag bit no kernel defines must be rejected at runtime with -EINVAL,
+	// which is how the probes above detect kernels predating a flag.
+	const unknownFlag = 1 << 20
+	assert.ErrorIs(t, haveSKBAdjustRoomFlags("adjust_room_unknown", 20, unknownFlag), ErrNotSupported)
+}
+
+func TestPrivilegedHaveSKBAdjustRoomDecapL4UDP(t *testing.T) {
+	testutils.PrivilegedTest(t)
+	testutils.SkipOnOldKernel(t, "5.2", "BPF_ADJ_ROOM_MAC mode support in bpf_skb_adjust_room")
+
+	// BPF_F_ADJ_ROOM_DECAP_L4_UDP is only in bpf-next so far, so the result
+	// depends on the kernel: just check that the probe gives an answer.
+	err := HaveSKBAdjustRoomDecapL4UDP()
+	if err != nil {
+		require.ErrorIs(t, err, ErrNotSupported)
+	}
+	t.Logf("bpf_skb_adjust_room BPF_F_ADJ_ROOM_DECAP_L4_UDP supported: %t", err == nil)
+}
+
+func TestPrivilegedHaveSKBAdjustRoomGeneveDecap(t *testing.T) {
+	testutils.PrivilegedTest(t)
+	testutils.SkipOnOldKernel(t, "5.2", "BPF_ADJ_ROOM_MAC mode support in bpf_skb_adjust_room")
+
+	// Without BPF_F_ADJ_ROOM_DECAP_L4_UDP, the decapsulation done by
+	// HaveSKBAdjustRoomDecapL4UDP must succeed on any kernel, so that the
+	// probe can only fail because of the flag.
+	assert.NoError(t, haveSKBAdjustRoomGeneveDecap("adjust_room_geneve",
+		unix.BPF_F_ADJ_ROOM_FIXED_GSO|unix.BPF_F_ADJ_ROOM_NO_CSUM_RESET))
 }
 
 func TestIPv6Support(t *testing.T) {

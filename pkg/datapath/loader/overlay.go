@@ -14,6 +14,7 @@ import (
 
 	"github.com/cilium/cilium/pkg/bpf"
 	"github.com/cilium/cilium/pkg/datapath/config"
+	"github.com/cilium/cilium/pkg/datapath/tunnel"
 	"github.com/cilium/cilium/pkg/identity"
 	"github.com/cilium/cilium/pkg/maps/registry"
 	"github.com/cilium/cilium/pkg/option"
@@ -60,7 +61,7 @@ func defaultOverlayMapRenames(lnc *config.Config, link netlink.Link) (renames ma
 }
 
 func replaceOverlayDatapath(ctx context.Context, logger *slog.Logger, reg *registry.MapRegistry,
-	collLoader *bpfCollectionLoader, lnc *config.Config, link netlink.Link) error {
+	collLoader *bpfCollectionLoader, lnc *config.Config, tunnelConfig tunnel.Config, link netlink.Link) error {
 	if err := compileOverlay(ctx, logger); err != nil {
 		return fmt.Errorf("compiling overlay program: %w", err)
 	}
@@ -70,9 +71,21 @@ func replaceOverlayDatapath(ctx context.Context, logger *slog.Logger, reg *regis
 		return fmt.Errorf("loading eBPF ELF %s: %w", overlayObj, err)
 	}
 
-	var obj overlayObjects
-	commit, cleanup, err := collLoader.LoadAndAssign(ctx, logger, &obj, spec, &bpf.CollectionOptions{
+	// With the BPF Geneve datapath, bpf_host tail calls into bpf_overlay
+	// through the shared cilium_calls_bpf_overlay program array, which only
+	// bpf_overlay populates. Request the map whenever the feature is enabled,
+	// so that a bpf_overlay object compiled without it fails to load here,
+	// rather than leaving bpf_host to open an empty map and drop every
+	// decapsulated packet with a missed tail call.
+	var (
+		obj overlayBPFGeneveObjects
+		to  any = &obj.overlayObjects
+	)
+	if tunnelConfig.EnableBPFGeneve() {
+		to = &obj
+	}
 
+	commit, cleanup, err := collLoader.LoadAndAssign(ctx, logger, to, spec, &bpf.CollectionOptions{
 		MapRegistry: reg,
 		Constants:   overlayConfiguration(lnc, link),
 		MapRenames:  overlayMapRenames(lnc, link),

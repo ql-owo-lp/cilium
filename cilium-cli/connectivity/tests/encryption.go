@@ -63,7 +63,8 @@ func getInterNodeIface(ctx context.Context, t *check.Test,
 		ipRouteGetCmd = fmt.Sprintf("%s iif cilium_host", ipRouteGetCmd)
 	}
 
-	if enc, ok := t.Context().Feature(features.EncryptionPod); wgEncap && ok && enc.Enabled && enc.Mode == "wireguard" {
+	bpfGeneveEncap := isBPFGeneveEncap(t, client, clientHost, server, serverHost, ipFam)
+	if enc, ok := t.Context().Feature(features.EncryptionPod); (wgEncap && ok && enc.Enabled && enc.Mode == "wireguard") || bpfGeneveEncap {
 		ipRouteGetCmd = fmt.Sprintf("ip -o route get %s", serverHost.Address(ipFam))
 	}
 
@@ -80,7 +81,7 @@ func getInterNodeIface(ctx context.Context, t *check.Test,
 
 	device := strings.TrimRight(dev.String(), "\n\r")
 
-	if tunnelEnabled && !wgEncap {
+	if tunnelEnabled && !wgEncap && !bpfGeneveEncap {
 		// When tunneling is enabled, and the traffic is routed to the cilium IP space
 		// we want to capture on the tunnel interface.
 		if device == defaults.HostDevice {
@@ -128,8 +129,9 @@ func getFilter(ctx context.Context, t *check.Test, client, clientHost *check.Pod
 		t.Fatalf("Invalid request type: %d", reqType)
 	}
 
-	if enc, ok := t.Context().Feature(features.EncryptionPod); wgEncap && tunnelEnabled && ok &&
-		enc.Enabled && enc.Mode == "wireguard" {
+	bpfGeneveEncap := isBPFGeneveEncap(t, client, clientHost, server, serverHost, ipFam)
+	if enc, ok := t.Context().Feature(features.EncryptionPod); (wgEncap && tunnelEnabled && ok &&
+		enc.Enabled && enc.Mode == "wireguard") || bpfGeneveEncap {
 		tunnelFilter, err := sniff.GetTunnelFilter(t.Context())
 		if err != nil {
 			t.Fatalf("Failed to build tunnel filter: %w", err)
@@ -213,6 +215,26 @@ func isWgEncap(t *check.Test) bool {
 	}
 
 	return true
+}
+
+// isBPFGeneveEncap checks whether traffic between client and server is
+// encapsulated by native BPF Geneve, which encapsulates packets in BPF and
+// redirects directly to the underlay device, bypassing cilium_geneve on egress.
+func isBPFGeneveEncap(t *check.Test, client, clientHost, server, serverHost *check.Pod, ipFam features.IPFamily) bool {
+	if tFeat, ok := t.Context().Feature(features.Tunnel); !(ok && tFeat.Enabled && tFeat.Mode == "geneve") {
+		return false
+	}
+	if bg, ok := t.Context().Feature(features.BPFGeneve); !(ok && bg.Enabled) {
+		return false
+	}
+	if server.Address(ipFam) != serverHost.Address(ipFam) {
+		return true
+	}
+	if hf, ok := t.Context().Feature(features.HostFirewall); ok && hf.Enabled &&
+		client.Address(ipFam) != clientHost.Address(ipFam) {
+		return true
+	}
+	return false
 }
 
 // PodToPodEncryption is a test case which checks the following:

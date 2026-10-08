@@ -129,6 +129,8 @@ const (
 	DefaultGlobalNamespace Feature = "clustermesh-default-global-namespace"
 
 	SubnetTopology Feature = "subnet-topology"
+
+	BPFGeneve Feature = "enable-bpf-geneve"
 )
 
 // Feature is the name of a Cilium Feature (e.g. l7-proxy, cni chaining mode etc)
@@ -430,6 +432,15 @@ func (fs Set) ExtractFromConfigMap(cm *v1.ConfigMap) {
 	}
 
 	fs[Tunnel], fs[TunnelPort] = ExtractTunnelFeatureFromConfigMap(cm)
+
+	geneveInnerProto := "eth"
+	if v, ok := cm.Data["geneve-inner-protocol"]; ok && v != "" {
+		geneveInnerProto = v
+	}
+	fs[BPFGeneve] = Status{
+		Enabled: cm.Data[string(BPFGeneve)] == "true",
+		Mode:    geneveInnerProto,
+	}
 
 	fs[Ztunnel] = Status{
 		Enabled: cm.Data["enable-ztunnel"] == "true",

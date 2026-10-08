@@ -133,6 +133,8 @@ func TestFeatureSet_extractFromConfigMap(t *testing.T) {
 		"enable-local-redirect-policy":   "true",
 		"bpf-lb-external-clusterip":      "true",
 		"enable-bgp-control-plane":       "true",
+		"enable-bpf-geneve":              "true",
+		"geneve-inner-protocol":          "ip",
 	}
 	fs.ExtractFromConfigMap(&cm)
 	assert.True(t, fs[IPv4].Enabled)
@@ -144,4 +146,6 @@ func TestFeatureSet_extractFromConfigMap(t *testing.T) {
 	assert.True(t, fs[BPFLBExternalClusterIP].Enabled)
 	assert.True(t, fs[BGPControlPlane].Enabled)
 	assert.Equal(t, "eni", fs[CiliumIPAMMode].Mode)
+	assert.True(t, fs[BPFGeneve].Enabled)
+	assert.Equal(t, "ip", fs[BPFGeneve].Mode)
 }

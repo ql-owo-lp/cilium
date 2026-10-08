@@ -82,6 +82,23 @@ func (o *overlayObjects) Close() {
 	bpfClose(o.FromOverlay, o.ToOverlay)
 }
 
+// overlayBPFGeneveObjects receives eBPF objects for attaching to overlay
+// interfaces when the BPF Geneve datapath is enabled. Objects originate from
+// bpf_overlay.c compiled with ENABLE_BPF_GENEVE.
+type overlayBPFGeneveObjects struct {
+	overlayObjects
+
+	// BPFGeneveCalls is the program array bpf_host tail calls into after
+	// decapsulating a Geneve packet in BPF. bpf_overlay only declares its
+	// entries (see __declare_tail_in()) and never references the map itself,
+	// so it has to be requested explicitly to be created and pinned.
+	BPFGeneveCalls *ebpf.Map `ebpf:"cilium_calls_bpf_overlay"`
+}
+
+func (o *overlayBPFGeneveObjects) Close() {
+	bpfClose(o.FromOverlay, o.ToOverlay, o.BPFGeneveCalls)
+}
+
 // wireguardObjects receives eBPF objects for attaching to Wireguard interfaces.
 // Objects originate from bpf_wireguard.c.
 type wireguardObjects struct {

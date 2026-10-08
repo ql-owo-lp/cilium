@@ -543,6 +543,14 @@ enum DropReason {
     // be evaluated. Split from DROP_FRAG_NOT_FOUND to distinguish ambient
     // external fragments from in-cluster fragment-tracking bugs.
     DROP_FRAG_NOT_FOUND_WORLD = 207;
+    // The BPF Geneve datapath received a packet with a malformed Geneve
+    // header.
+    DROP_GENEVE_HDR_INVALID = 208;
+    // The BPF Geneve datapath received a packet with a malformed or
+    // unsupported Geneve option.
+    DROP_GENEVE_OPT_INVALID = 209;
+    // The BPF Geneve datapath failed to encapsulate a packet.
+    DROP_GENEVE_ENCAP_FAILED = 210;
 }
 
 enum TrafficDirection {

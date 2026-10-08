@@ -603,6 +603,17 @@
           },
           "type": "object"
         },
+        "geneve": {
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "innerProtocol": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
         "hostLegacyRouting": {
           "type": [
             "null",

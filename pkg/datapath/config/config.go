@@ -187,6 +187,17 @@ type Config struct {
 	// subsequent calls to NodeConfigurationChanged().
 	TunnelPort uint16
 
+	// TunnelSrcPortLow and TunnelSrcPortHigh bound the UDP source port range
+	// used by the BPF Geneve datapath when encapsulating packets, mirroring
+	// the range configured on the tunnel device. 0/0 stands for 1-65535, the
+	// range setupGeneveDevice() configures in that case (the geneve driver's
+	// default).
+	//
+	// These fields are immutable at runtime. The values will not change in
+	// subsequent calls to NodeConfigurationChanged().
+	TunnelSrcPortLow  uint16
+	TunnelSrcPortHigh uint16
+
 	// EnableAutoDirectRouting enables the use of direct routes for
 	// communication between nodes if two nodes have direct L2
 	// connectivity.

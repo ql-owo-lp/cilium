@@ -30,6 +30,12 @@ const (
 	TunnelOverheadIPv4 = 50
 	TunnelOverheadIPv6 = 70
 
+	// InnerEthernetOverhead is the "Original Ethernet" share of
+	// TunnelOverheadIPv{4,6}. The native BPF Geneve datapath with
+	// --geneve-inner-protocol=ip carries IP packets without it, which brings
+	// the tunnel overhead down to 36B (IPv4 underlay) / 56B (IPv6 underlay).
+	InnerEthernetOverhead = 14
+
 	// EncryptionIPsecOverhead is an approximation for bytes used for
 	// encryption. Depending on key size and encryption type the actual
 	// size may vary here we do calculations for 128B keys and Auth. The
@@ -91,11 +97,15 @@ type Configuration struct {
 }
 
 // NewConfiguration returns a new MTU configuration which is used to calculate
-// MTU values from a base MTU based on the config.
-func NewConfiguration(authKeySize int, ipsecEnabled, encapEnabled, wireguardEnabled, tunnelOverIPv6 bool) Configuration {
+// MTU values from a base MTU based on the config. tunnelL3Inner indicates that
+// the tunnel carries IP packets without an inner Ethernet header.
+func NewConfiguration(authKeySize int, ipsecEnabled, encapEnabled, wireguardEnabled, tunnelOverIPv6, tunnelL3Inner bool) Configuration {
 	tunnelOverhead := TunnelOverheadIPv4
 	if tunnelOverIPv6 {
 		tunnelOverhead = TunnelOverheadIPv6
+	}
+	if tunnelL3Inner {
+		tunnelOverhead -= InnerEthernetOverhead
 	}
 	return Configuration{
 		authKeySize:      authKeySize,

@@ -25,6 +25,7 @@ import (
 	"github.com/cilium/cilium/pkg/datapath/linux/linux_defaults"
 	"github.com/cilium/cilium/pkg/datapath/linux/route"
 	"github.com/cilium/cilium/pkg/datapath/linux/safenetlink"
+	"github.com/cilium/cilium/pkg/datapath/linux/sysctl"
 	"github.com/cilium/cilium/pkg/datapath/prefilter"
 	"github.com/cilium/cilium/pkg/datapath/tables"
 	"github.com/cilium/cilium/pkg/datapath/tunnel"
@@ -164,6 +165,57 @@ func addIPv6ENIRules() error {
 	return nil
 }
 
+// bpfGeneveRPFilterSettings returns the sysctl settings that change
+// net.ipv4.conf.<dev>.rp_filter from strict (1) to loose (2) on the native
+// devices if the BPF Geneve datapath is enabled.
+//
+// bpf_host decapsulates Geneve packets on the native device they arrive on;
+// they are not received again on cilium_geneve. The packets it passes to the
+// stack (L7 proxy redirect, legacy host routing, Geneve DSR without BPF host
+// routing) therefore enter the stack on the native device. Their source is a
+// remote pod, which is routed via cilium_host, so strict reverse path
+// filtering on the native device drops them as martians. Loose mode (2)
+// accepts them, and so does 0 (no validation), so these values are left
+// alone. Reinitialize() sets net.ipv4.conf.all.rp_filter to 0, so the
+// per-device value applies. IPv6 has no reverse path filter setting.
+//
+// Like the other sysctls set by the agent, the settings are kept applied by
+// the sysctl reconciler and not restored if the datapath is disabled. They
+// ignore errors because native devices come and go: the setting of a device
+// that disappears must not fail reconciliation, and a failed write is logged
+// rather than failing the datapath initialization.
+func bpfGeneveRPFilterSettings(logger *slog.Logger, sysctl sysctl.Sysctl, tunnelConfig tunnel.Config, devices []string) []tables.Sysctl {
+	if !tunnelConfig.EnableBPFGeneve() || !option.Config.EnableIPv4 {
+		return nil
+	}
+
+	var settings []tables.Sysctl
+	for _, dev := range devices {
+		name := []string{"net", "ipv4", "conf", dev, "rp_filter"}
+		val, err := sysctl.Read(name)
+		if err != nil {
+			logger.Warn("Unable to read rp_filter of native device, packets decapsulated by BPF Geneve may be dropped",
+				logfields.Error, err,
+				logfields.Device, dev,
+			)
+			continue
+		}
+		if val != "1" {
+			continue
+		}
+		logger.Info("Changing rp_filter of native device from strict (1) to loose (2) for BPF Geneve",
+			logfields.Device, dev,
+		)
+		settings = append(settings, tables.Sysctl{
+			Name:      name,
+			Val:       "2",
+			IgnoreErr: true,
+			Warn:      "Unable to change rp_filter of native device from strict (1) to loose (2), packets decapsulated by BPF Geneve may be dropped",
+		})
+	}
+	return settings
+}
+
 func cleanIngressQdisc(logger *slog.Logger, devices []string) error {
 	for _, iface := range devices {
 		link, err := safenetlink.LinkByName(iface)
@@ -203,8 +255,31 @@ func cleanCallsMaps(mapNamePattern string) error {
 	return err
 }
 
+// bpfGeneveMaps lists the maps pinned by the BPF Geneve datapath in
+// bpf.TCGlobalsPath(). They are shared between bpf_host and bpf_overlay and
+// are only populated while the feature is enabled.
+var bpfGeneveMaps = []string{
+	"cilium_calls_bpf_overlay",
+	"cilium_geneve_meta",
+}
+
+// cleanBPFGeneveMaps removes the pins of the BPF Geneve datapath from
+// globalsDir, usually bpf.TCGlobalsPath(). Without this, a stale
+// cilium_calls_bpf_overlay would be reopened by bpf_host after the feature is
+// turned off and a later re-enable could pick up outdated entries.
+func cleanBPFGeneveMaps(globalsDir string) (err error) {
+	for _, name := range bpfGeneveMaps {
+		err = errors.Join(err, os.RemoveAll(filepath.Join(globalsDir, name)))
+	}
+	return err
+}
+
 func reinitializeOverlay(ctx context.Context, logger *slog.Logger, reg *registry.MapRegistry,
 	collLoader *bpfCollectionLoader, lnc *config.Config, tunnelConfig tunnel.Config) error {
+	if !tunnelConfig.EnableBPFGeneve() {
+		cleanBPFGeneveMaps(bpf.TCGlobalsPath())
+	}
+
 	// tunnelConfig.EncapProtocol() can be one of tunnel.[Disabled, VXLAN, Geneve]
 	// if it is disabled, the overlay network programs don't have to be (re)initialized
 	if tunnelConfig.EncapProtocol() == tunnel.Disabled {
@@ -223,7 +298,7 @@ func reinitializeOverlay(ctx context.Context, logger *slog.Logger, reg *registry
 		return fmt.Errorf("failed to retrieve link for interface %s: %w", iface, err)
 	}
 
-	if err := replaceOverlayDatapath(ctx, logger, reg, collLoader, lnc, link); err != nil {
+	if err := replaceOverlayDatapath(ctx, logger, reg, collLoader, lnc, tunnelConfig, link); err != nil {
 		return fmt.Errorf("failed to load overlay programs: %w", err)
 	}
 
@@ -340,6 +415,14 @@ func (l *loader) Reinitialize(ctx context.Context, lnc *config.Config, tunnelCon
 		tunnelConfig.SrcPortLow(), tunnelConfig.SrcPortHigh(), lnc.DeviceMTU, bigtcp); err != nil {
 		return fmt.Errorf("failed to setup %s tunnel device: %w", tunnelConfig.EncapProtocol(), err)
 	}
+
+	// The orchestrator calls Reinitialize() whenever the native devices
+	// change, before bpf_host is attached to them, which covers devices
+	// added at runtime. ApplySettings() keeps the last setting of a sysctl,
+	// so appending before the ENI rules lets their stricter error handling
+	// win for a device both change.
+	sysSettings = append(sysSettings,
+		bpfGeneveRPFilterSettings(l.logger, l.sysctl, tunnelConfig, lnc.DeviceNames())...)
 
 	if option.Config.IPAM == ipamOption.IPAMENI {
 		var err error

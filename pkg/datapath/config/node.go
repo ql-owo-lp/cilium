@@ -94,6 +94,9 @@ func NodeConfig(lnc *Config) Node {
 
 	node.TracingIPOptionType = uint8(option.Config.IPTracingOptionType)
 
+	node.TunnelSrcPortLow = lnc.TunnelSrcPortLow
+	node.TunnelSrcPortHigh = lnc.TunnelSrcPortHigh
+
 	if option.Config.PolicyDenyResponse == option.PolicyDenyResponseIcmp {
 		node.PolicyDenyResponseEnabled = true
 	} else {

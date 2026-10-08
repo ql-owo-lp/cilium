@@ -15,13 +15,14 @@ import (
 
 	"github.com/cilium/cilium/pkg/datapath/linux/probes"
 	"github.com/cilium/cilium/pkg/datapath/linux/safenetlink"
+	"github.com/cilium/cilium/pkg/datapath/tunnel"
 	"github.com/cilium/cilium/pkg/logging/logfields"
 	"github.com/cilium/cilium/pkg/option"
 )
 
 // CheckRequirements checks that minimum kernel requirements are met for
 // configuring the BPF datapath.
-func CheckRequirements(log *slog.Logger) error {
+func CheckRequirements(log *slog.Logger, tunnelConfig tunnel.Config) error {
 	_, err := safenetlink.RuleList(netlink.FAMILY_V4)
 	if errors.Is(err, unix.EAFNOSUPPORT) {
 		log.Error("Policy routing:NOT OK. "+
@@ -148,6 +149,58 @@ func CheckRequirements(log *slog.Logger) error {
 			}
 			log.Info("BPF_FIB_LOOKUP_SRC is not supported; it will not be used")
 		}
+
+		if err := checkBPFGeneveRequirements(log, tunnelConfig, option.Config.EnableIPv4, option.Config.EnableIPv6,
+			probes.HaveSKBAdjustRoomEncapL2Eth, probes.HaveSKBAdjustRoomDecapL3,
+			probes.HaveSKBAdjustRoomDecapL4UDP); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+// checkBPFGeneveRequirements verifies that the kernel supports the
+// bpf_skb_adjust_room flags the native BPF Geneve datapath relies on, using
+// the given probes. It is a no-op when the datapath is not enabled.
+func checkBPFGeneveRequirements(log *slog.Logger, tunnelConfig tunnel.Config, enableIPv4, enableIPv6 bool,
+	haveEncapL2Eth, haveDecapL3, haveDecapL4UDP func() error) error {
+	if !tunnelConfig.EnableBPFGeneve() {
+		return nil
+	}
+
+	if haveEncapL2Eth() != nil {
+		return errors.New("--enable-bpf-geneve requires Linux >= 5.13 (bpf_skb_adjust_room ENCAP_L2_ETH)")
+	}
+
+	// Decapsulating a packet whose inner IP family differs from the outer one
+	// needs BPF_F_ADJ_ROOM_DECAP_L3_IPV4/IPV6 to fix up skb->protocol. Such
+	// packets exist as soon as a pod family other than the underlay family is
+	// enabled.
+	if bpfGeneveMixedFamilies(tunnelConfig.UnderlayProtocol(), enableIPv4, enableIPv6) && haveDecapL3() != nil {
+		return errors.New("--enable-bpf-geneve with a pod IP family different from the underlay requires Linux >= 6.3 (bpf_skb_adjust_room DECAP_L3)")
+	}
+
+	if tunnelConfig.IsL3InnerProtocol() {
+		if err := haveDecapL4UDP(); err != nil {
+			if !errors.Is(err, probes.ErrNotSupported) {
+				return errors.New("Unable to determine if BPF_F_ADJ_ROOM_DECAP_L4_UDP is supported")
+			}
+			log.Info("BPF_F_ADJ_ROOM_DECAP_L4_UDP is not supported; it will not be used")
+		}
+	}
+
+	return nil
+}
+
+// bpfGeneveMixedFamilies returns true if pod traffic of a family other than
+// the underlay family can be carried over the tunnel.
+func bpfGeneveMixedFamilies(underlay tunnel.UnderlayProtocol, enableIPv4, enableIPv6 bool) bool {
+	switch underlay {
+	case tunnel.IPv4:
+		return enableIPv6
+	case tunnel.IPv6:
+		return enableIPv4
+	default:
+		return enableIPv4 && enableIPv6
+	}
 }

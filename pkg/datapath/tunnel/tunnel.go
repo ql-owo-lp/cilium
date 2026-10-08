@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/pflag"
 
 	dpcfgdef "github.com/cilium/cilium/pkg/datapath/linux/config/defines"
+	"github.com/cilium/cilium/pkg/datapath/linux/probes"
 	"github.com/cilium/cilium/pkg/datapath/linux/safenetlink"
 	"github.com/cilium/cilium/pkg/defaults"
 	"github.com/cilium/cilium/pkg/option"
@@ -37,6 +38,17 @@ const (
 	Auto UnderlayProtocol = "auto"
 )
 
+// GeneveInnerProtocol represents the inner protocol encapsulation mode for Geneve.
+type GeneveInnerProtocol string
+
+const (
+	// GeneveInnerProtoETH specifies L2 Ethernet (TEB, 0x6558) inside Geneve
+	GeneveInnerProtoETH GeneveInnerProtocol = "eth"
+
+	// GeneveInnerProtoIP specifies L3 IP (IPv4 0x0800 / IPv6 0x86DD) inside Geneve
+	GeneveInnerProtoIP GeneveInnerProtocol = "ip"
+)
+
 func (tp EncapProtocol) String() string { return string(tp) }
 
 type BPFEncapProtocol = uint8
@@ -58,17 +70,39 @@ func (tp EncapProtocol) ToDpID() BPFEncapProtocol {
 	}
 }
 
+// BPFGeneveInnerProtocol is the datapath identifier of the Geneve inner
+// protocol, emitted through the GENEVE_INNER_PROTOCOL define. The values must
+// match GENEVE_INNER_PROTO_ETH and GENEVE_INNER_PROTO_IP in
+// bpf/lib/geneve_encap.h.
+type BPFGeneveInnerProtocol = uint8
+
+const (
+	GENEVE_INNER_PROTO_ETH BPFGeneveInnerProtocol = 1
+	GENEVE_INNER_PROTO_IP  BPFGeneveInnerProtocol = 2
+)
+
+func (ip GeneveInnerProtocol) ToDpID() BPFGeneveInnerProtocol {
+	switch ip {
+	case GeneveInnerProtoIP:
+		return GENEVE_INNER_PROTO_IP
+	default:
+		return GENEVE_INNER_PROTO_ETH
+	}
+}
+
 // Config represents the materialized tunneling configuration to be used,
 // depending on the user configuration and optional overrides required by
 // additional features.
 type Config struct {
-	underlay       UnderlayProtocol
-	protocol       EncapProtocol
-	port           uint16
-	srcPortLow     uint16
-	srcPortHigh    uint16
-	deviceName     string
-	shouldAdaptMTU bool
+	underlay            UnderlayProtocol
+	protocol            EncapProtocol
+	geneveInnerProtocol GeneveInnerProtocol
+	enableBPFGeneve     bool
+	port                uint16
+	srcPortLow          uint16
+	srcPortHigh         uint16
+	deviceName          string
+	shouldAdaptMTU      bool
 }
 
 type newConfigIn struct {
@@ -83,13 +117,15 @@ type newConfigIn struct {
 
 var (
 	configDisabled = Config{
-		underlay:       Auto,
-		protocol:       Disabled,
-		port:           0,
-		srcPortLow:     0,
-		srcPortHigh:    0,
-		deviceName:     "",
-		shouldAdaptMTU: false,
+		underlay:            Auto,
+		protocol:            Disabled,
+		geneveInnerProtocol: GeneveInnerProtoETH,
+		enableBPFGeneve:     false,
+		port:                0,
+		srcPortLow:          0,
+		srcPortHigh:         0,
+		deviceName:          "",
+		shouldAdaptMTU:      false,
 	}
 )
 
@@ -98,6 +134,30 @@ func newConfig(in newConfigIn) (Config, error) {
 	case VXLAN, Geneve:
 	default:
 		return configDisabled, fmt.Errorf("invalid tunnel protocol %q", in.Cfg.TunnelProtocol)
+	}
+
+	geneveInnerProto := GeneveInnerProtocol(in.Cfg.GeneveInnerProtocol)
+	if geneveInnerProto == "" {
+		geneveInnerProto = GeneveInnerProtoETH
+	}
+	switch geneveInnerProto {
+	case GeneveInnerProtoETH, GeneveInnerProtoIP:
+	default:
+		return configDisabled, fmt.Errorf("invalid geneve inner protocol %q (must be %q or %q)",
+			in.Cfg.GeneveInnerProtocol, GeneveInnerProtoETH, GeneveInnerProtoIP)
+	}
+
+	// The native BPF Geneve datapath only exists for Geneve, and the L3-only
+	// inner protocol only exists in the native datapath (the kernel Geneve
+	// device always carries Ethernet frames). Reject inconsistent settings
+	// rather than silently falling back to the kernel datapath.
+	if in.Cfg.EnableBPFGeneve && EncapProtocol(in.Cfg.TunnelProtocol) != Geneve {
+		return configDisabled, fmt.Errorf("enable-bpf-geneve requires tunnel-protocol=%s, got %q",
+			Geneve, in.Cfg.TunnelProtocol)
+	}
+	if geneveInnerProto == GeneveInnerProtoIP && !in.Cfg.EnableBPFGeneve {
+		return configDisabled, fmt.Errorf("geneve-inner-protocol=%s requires tunnel-protocol=%s and enable-bpf-geneve=true",
+			GeneveInnerProtoIP, Geneve)
 	}
 
 	selectedUnderlay := UnderlayProtocol(in.Cfg.UnderlayProtocol)
@@ -125,13 +185,15 @@ func newConfig(in newConfigIn) (Config, error) {
 	}
 
 	cfg := Config{
-		underlay:       selectedUnderlay,
-		protocol:       EncapProtocol(in.Cfg.TunnelProtocol),
-		port:           in.Cfg.TunnelPort,
-		srcPortLow:     0,
-		srcPortHigh:    0,
-		deviceName:     "",
-		shouldAdaptMTU: false,
+		underlay:            selectedUnderlay,
+		protocol:            EncapProtocol(in.Cfg.TunnelProtocol),
+		geneveInnerProtocol: geneveInnerProto,
+		enableBPFGeneve:     in.Cfg.EnableBPFGeneve,
+		port:                in.Cfg.TunnelPort,
+		srcPortLow:          0,
+		srcPortHigh:         0,
+		deviceName:          "",
+		shouldAdaptMTU:      false,
 	}
 
 	if _, err := fmt.Sscanf(in.Cfg.TunnelSourcePortRange, "%d-%d", &cfg.srcPortLow, &cfg.srcPortHigh); err != nil {
@@ -158,6 +220,7 @@ func newConfig(in newConfigIn) (Config, error) {
 	if !enabled {
 		ret := configDisabled
 		ret.underlay = selectedUnderlay
+		ret.geneveInnerProtocol = geneveInnerProto
 		return ret, nil
 	}
 
@@ -177,9 +240,13 @@ func newConfig(in newConfigIn) (Config, error) {
 	return cfg, nil
 }
 
-// NewTestConfig returns a new TunnelConfig for testing purposes.
+// NewTestConfig returns a new TunnelConfig for testing purposes. Geneve uses
+// the kernel datapath; use NewTestBPFGeneveConfig to test the native one.
 func NewTestConfig(proto EncapProtocol) Config {
-	cfg := Config{protocol: proto}
+	cfg := Config{
+		protocol:            proto,
+		geneveInnerProtocol: GeneveInnerProtoETH,
+	}
 
 	switch proto {
 	case VXLAN:
@@ -193,6 +260,17 @@ func NewTestConfig(proto EncapProtocol) Config {
 	return cfg
 }
 
+// NewTestBPFGeneveConfig returns a Geneve TunnelConfig over the given underlay
+// with the native BPF Geneve datapath enabled and the given inner protocol,
+// for testing purposes.
+func NewTestBPFGeneveConfig(underlay UnderlayProtocol, inner GeneveInnerProtocol) Config {
+	cfg := NewTestConfig(Geneve)
+	cfg.underlay = underlay
+	cfg.enableBPFGeneve = true
+	cfg.geneveInnerProtocol = inner
+	return cfg
+}
+
 // EncapProtocol returns the enabled tunnel protocol. The tunnel protocol may be
 // set to either VXLAN or Geneve even when the primary mode is native routing, in
 // case an additional feature (e.g., egress gateway) may request some traffic to
@@ -200,6 +278,19 @@ func NewTestConfig(proto EncapProtocol) Config {
 func (cfg Config) EncapProtocol() EncapProtocol { return cfg.protocol }
 
 func (cfg Config) UnderlayProtocol() UnderlayProtocol { return cfg.underlay }
+
+// EnableBPFGeneve returns whether the native BPF Geneve datapath replaces the
+// kernel Geneve device for encapsulation and decapsulation. It implies
+// EncapProtocol() == Geneve.
+func (cfg Config) EnableBPFGeneve() bool {
+	return cfg.protocol == Geneve && cfg.enableBPFGeneve
+}
+
+// IsL3InnerProtocol returns true when the native BPF Geneve datapath carries
+// IP packets directly, without the 14-byte inner Ethernet header.
+func (cfg Config) IsL3InnerProtocol() bool {
+	return cfg.EnableBPFGeneve() && cfg.geneveInnerProtocol == GeneveInnerProtoIP
+}
 
 // Port returns the port used by the tunnel (0 if disabled).
 func (cfg Config) Port() uint16 { return cfg.port }
@@ -235,6 +326,11 @@ func (cfg Config) datapathConfigProvider() (dpcfgdef.NodeOut, dpcfgdef.NodeFnOut
 	defines := make(dpcfgdef.Map)
 	definesFn := func() (dpcfgdef.Map, error) { return nil, nil }
 
+	if cfg.EnableBPFGeneve() {
+		defines["ENABLE_BPF_GENEVE"] = "1"
+		defines["GENEVE_INNER_PROTOCOL"] = fmt.Sprintf("%d", cfg.geneveInnerProtocol.ToDpID())
+	}
+
 	if cfg.EncapProtocol() != Disabled {
 		definesFn = func() (dpcfgdef.Map, error) {
 			tunnelDev, err := safenetlink.LinkByName(cfg.DeviceName())
@@ -242,9 +338,13 @@ func (cfg Config) datapathConfigProvider() (dpcfgdef.NodeOut, dpcfgdef.NodeFnOut
 				return nil, fmt.Errorf("failed to retrieve device info for %q: %w", cfg.DeviceName(), err)
 			}
 
-			return dpcfgdef.Map{
+			m := dpcfgdef.Map{
 				"ENCAP_IFINDEX": fmt.Sprintf("%d", tunnelDev.Attrs().Index),
-			}, nil
+			}
+			if cfg.IsL3InnerProtocol() && probes.HaveSKBAdjustRoomDecapL4UDP() != nil {
+				m["HAVE_DECAP_L4_UDP"] = "0"
+			}
+			return m, nil
 		}
 	}
 
@@ -301,6 +401,8 @@ type userCfg struct {
 	TunnelSourcePortRange string
 	TunnelPort            uint16
 	UnderlayProtocol      string
+	GeneveInnerProtocol   string
+	EnableBPFGeneve       bool
 }
 
 // Flags implements the cell.Flagger interface, to register the given flags.
@@ -309,6 +411,8 @@ func (def userCfg) Flags(flags *pflag.FlagSet) {
 	flags.Uint16("tunnel-port", def.TunnelPort, fmt.Sprintf("Tunnel port (default %d for \"vxlan\" and %d for \"geneve\")", defaults.TunnelPortVXLAN, defaults.TunnelPortGeneve))
 	flags.String("tunnel-source-port-range", def.TunnelSourcePortRange, fmt.Sprintf("Tunnel source port range hint (default %s)", defaults.TunnelSourcePortRange))
 	flags.String("underlay-protocol", def.UnderlayProtocol, "IP family for the underlay (\"ipv4\", \"ipv6\", or \"auto\")")
+	flags.String("geneve-inner-protocol", def.GeneveInnerProtocol, "Inner protocol carried in Geneve frames by the native BPF Geneve datapath (\"eth\" for Ethernet/TEB, wire-compatible with the kernel Geneve device, or \"ip\" for IPv4/IPv6 without inner Ethernet header). \"ip\" requires --enable-bpf-geneve and \"ip\" on all nodes, and bpf_skb_adjust_room() support for BPF_F_ADJ_ROOM_DECAP_L4_UDP (Linux bpf-next commit ec20dee2f2c4, not in a released kernel as of 2026-10)")
+	flags.Bool("enable-bpf-geneve", def.EnableBPFGeneve, "Enable the native BPF Geneve datapath instead of the kernel Geneve device (beta). Requires --tunnel-protocol=geneve and Linux >= 5.13 (>= 6.3 when pod and underlay IP families differ; see --geneve-inner-protocol for \"ip\"). Over an IPv6 underlay the outer UDP checksum is zero (RFC 6935/6936), which Cilium's cilium_geneve device accepts; other Geneve endpoints must allow it (udp6zerocsumrx)")
 }
 
 var defaultConfig = userCfg{
@@ -316,4 +420,6 @@ var defaultConfig = userCfg{
 	TunnelSourcePortRange: defaults.TunnelSourcePortRange,
 	TunnelPort:            0, // auto-detect based on the protocol.
 	UnderlayProtocol:      defaults.UnderlayProtocol,
+	GeneveInnerProtocol:   string(GeneveInnerProtoETH),
+	EnableBPFGeneve:       false,
 }

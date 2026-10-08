@@ -107,6 +107,9 @@ var errors = map[uint8]string{
 	205: "Punt to proxy",
 	206: "No device",
 	207: "First logical datagram fragment not found from world",
+	208: "Invalid Geneve header",
+	209: "Invalid or unsupported critical Geneve option",
+	210: "Geneve encapsulation failed",
 }
 
 func extendedReason(extError int8) string {

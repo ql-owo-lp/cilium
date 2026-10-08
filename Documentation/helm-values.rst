@@ -380,6 +380,14 @@
      - Enable trace events.
      - bool
      - ``true``
+   * - :spelling:ignore:`bpf.geneve.enabled`
+     - Enable the native BPF Geneve datapath (beta): Geneve encapsulation and decapsulation are performed by the BPF programs instead of the kernel's ``cilium_geneve`` device. Requires ``tunnelProtocol: geneve`` and Linux >= 5.13 (>= 6.3 when the pod and underlay IP families differ, i.e. in dual-stack clusters). Only enable it once all nodes run a Cilium version that supports it.
+     - bool
+     - ``false``
+   * - :spelling:ignore:`bpf.geneve.innerProtocol`
+     - Inner protocol used by the BPF Geneve datapath. Possible values:   - eth: carry the inner Ethernet header (ETH_P_TEB), wire compatible     with the kernel Geneve device.   - ip: carry the inner IP packet only, saving 14 bytes of MTU overhead.     The kernel Geneve device does not accept such packets, so all nodes     must use the BPF Geneve datapath with ``innerProtocol: ip``. Requires     ``bpf_skb_adjust_room()`` support for ``BPF_F_ADJ_ROOM_DECAP_L4_UDP``     (Linux bpf-next commit ``ec20dee2f2c4``\ , not in a released kernel as of     2026-10).
+     - string
+     - ``eth``
    * - :spelling:ignore:`bpf.hostLegacyRouting`
      - Configure whether direct routing mode should route traffic via host stack (true) or directly and more efficiently out of BPF (false) if the kernel supports it. The latter has the implication that it will also bypass netfilter in the host namespace.
      - bool

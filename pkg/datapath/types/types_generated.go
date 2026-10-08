@@ -235,6 +235,23 @@ type EndpointKey struct {
 	ClusterID uint16
 }
 
+// GeneveMetadata is generated from the BPF C type geneve_metadata.
+type GeneveMetadata struct {
+	_      structs.HostLayout
+	Magic  uint32
+	Vni    uint32
+	Family uint8
+	OptLen uint8
+	Pad    uint16
+	IP4    struct {
+		_     structs.HostLayout
+		SAddr uint32
+		DAddr uint32
+	}
+	_       [24]byte
+	RawOpts [256]uint8
+}
+
 // Identity is generated from the BPF C type identity.
 type Identity uint32
 

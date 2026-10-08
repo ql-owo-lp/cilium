@@ -209,15 +209,18 @@ func (s *podToPodEncryptionV2) tunnelTCPDumpFilters4(ctx context.Context) (clien
 	// Start at the UDP header (VXLAN|GENEVE) and index into IPHeader.Src and IPHeader.Dst
 	// UDP(8)+VXLAN|GENEVE(8)+ETHER(14) = udp[30] + Offset to IPHeader.Src = udp[42]
 	// UDP(8)+VXLAN|GENEVE(8)+ETHER(14) = udp[30] + Offset to IPHeader.Dst = udp[46]
-	fmtInnerIPHeaderSrcIPv4Underlay := "udp[42:4] == %s"
-	fmtInnerIPHeaderDstIPv4Underlay := "udp[46:4] == %s"
+	// When native BPF Geneve runs in L3 IP mode (geneve-inner-protocol=ip), the
+	// 14-byte inner Ethernet header is omitted (base offset 16 instead of 30).
+	base := 16 + s.tunnelInnerL2Len()
+	fmtInnerIPHeaderSrcIPv4Underlay := fmt.Sprintf("udp[%d:4] == %%s", base+12)
+	fmtInnerIPHeaderDstIPv4Underlay := fmt.Sprintf("udp[%d:4] == %%s", base+16)
 
 	// In case of IPv6 underlay, we cannot use the 'udp[x:y] filter. Quoting the
 	// pcap-filter map page: Note that tcp, udp and other upper-layer protocol types
 	// only apply to IPv4, not IPv6 (this will be fixed in the future). Hence, start
 	// from the IPv6 header, and assume that no extensions are present.
-	fmtInnerIPHeaderSrcIPv6Underlay := "ip6[82:4] == %s"
-	fmtInnerIPHeaderDstIPv6Underlay := "ip6[86:4] == %s"
+	fmtInnerIPHeaderSrcIPv6Underlay := fmt.Sprintf("ip6[%d:4] == %%s", 40+base+12)
+	fmtInnerIPHeaderDstIPv6Underlay := fmt.Sprintf("ip6[%d:4] == %%s", 40+base+16)
 
 	fmtFilter := "%s and ((ip and %s and %s) or (ip6 and %s and %s))"
 
@@ -316,6 +319,17 @@ func (s *podToPodEncryptionV2) resolveTCPDumpFilters4(ctx context.Context) (clie
 // These are sent unencrypted when node encryption and wireguard is enabled.
 const icmpv6NAFilter = "not (icmp6 and ip6[40] = 136)"
 
+// tunnelInnerL2Len returns the length of the inner L2 header inside the tunnel
+// payload (14 bytes for Ethernet, 0 when native BPF Geneve uses L3 IP mode).
+func (s *podToPodEncryptionV2) tunnelInnerL2Len() int {
+	if tFeat, ok := s.ct.Feature(features.Tunnel); ok && tFeat.Enabled && tFeat.Mode == "geneve" {
+		if bg, ok := s.ct.Feature(features.BPFGeneve); ok && bg.Enabled && bg.Mode == "ip" {
+			return 0
+		}
+	}
+	return 14
+}
+
 // tunnelTCPDumpFilters6 is equivalent to tunnelTCPDumpFilters4 but for IPv6.
 func (s *podToPodEncryptionV2) tunnelTCPDumpFilters6(ctx context.Context) (clientFilter string, serverFilter string, err error) {
 	if ctx.Err() != nil {
@@ -329,15 +343,22 @@ func (s *podToPodEncryptionV2) tunnelTCPDumpFilters6(ctx context.Context) (clien
 	// IP6 addresses are 16 bytes large, TCPDump syntax can peek at a maximum of
 	// 4 bytes at a time, therefore we'll create 4 peek directives and slice up
 	// the IPv6 address into groups of 4 byte words: (4peeks x 4bytes = 16byte IPv6 Address).
-	innerIPv6SrcIPv4Underlay := "(udp[38:4] == %s and udp[42:4] == %s and udp[46:4] == %s and udp[50:4] == %s)"
-	innerIPv6DstIPv4Underlay := "(udp[54:4] == %s and udp[58:4] == %s and udp[62:4] == %s and udp[66:4] == %s)"
+	base := 16 + s.tunnelInnerL2Len()
+	srcOff, dstOff := base+8, base+24
+	innerIPv6SrcIPv4Underlay := fmt.Sprintf("(udp[%d:4] == %%s and udp[%d:4] == %%s and udp[%d:4] == %%s and udp[%d:4] == %%s)",
+		srcOff, srcOff+4, srcOff+8, srcOff+12)
+	innerIPv6DstIPv4Underlay := fmt.Sprintf("(udp[%d:4] == %%s and udp[%d:4] == %%s and udp[%d:4] == %%s and udp[%d:4] == %%s)",
+		dstOff, dstOff+4, dstOff+8, dstOff+12)
 
 	// In case of IPv6 underlay, we cannot use the 'udp[x:y] filter. Quoting the
 	// pcap-filter map page: Note that tcp, udp and other upper-layer protocol types
 	// only apply to IPv4, not IPv6 (this will be fixed in the future). Hence, start
 	// from the IPv6 header, and assume that no extensions are present.
-	innerIPv6SrcIPv6Underlay := "(ip6[78:4] == %s and ip6[82:4] == %s and ip6[86:4] == %s and ip6[90:4] == %s)"
-	innerIPv6DstIPv6Underlay := "(ip6[94:4] == %s and ip6[98:4] == %s and ip6[102:4] == %s and ip6[106:4] == %s)"
+	srcOff6, dstOff6 := 40+srcOff, 40+dstOff
+	innerIPv6SrcIPv6Underlay := fmt.Sprintf("(ip6[%d:4] == %%s and ip6[%d:4] == %%s and ip6[%d:4] == %%s and ip6[%d:4] == %%s)",
+		srcOff6, srcOff6+4, srcOff6+8, srcOff6+12)
+	innerIPv6DstIPv6Underlay := fmt.Sprintf("(ip6[%d:4] == %%s and ip6[%d:4] == %%s and ip6[%d:4] == %%s and ip6[%d:4] == %%s)",
+		dstOff6, dstOff6+4, dstOff6+8, dstOff6+12)
 
 	fmtFilter := "%s and ((ip and %s and %s) or (ip6 and %s and %s))"
 

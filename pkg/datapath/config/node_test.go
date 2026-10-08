@@ -49,3 +49,11 @@ func TestNodeConfigIPMasqAgentIPv4(t *testing.T) {
 		})
 	}
 }
+
+// TestNodeConfigTunnelSrcPortRange verifies that the source port range of
+// --tunnel-source-port-range reaches the BPF Geneve datapath (L1-09).
+func TestNodeConfigTunnelSrcPortRange(t *testing.T) {
+	node := NodeConfig(&Config{TunnelSrcPortLow: 32768, TunnelSrcPortHigh: 61000})
+	assert.Equal(t, uint16(32768), node.TunnelSrcPortLow)
+	assert.Equal(t, uint16(61000), node.TunnelSrcPortHigh)
+}

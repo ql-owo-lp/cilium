@@ -171,10 +171,10 @@ var Cell = cell.Module(
 	plugins.Cell,
 )
 
-func initDatapath(rootLogger *slog.Logger, lifecycle cell.Lifecycle) {
+func initDatapath(rootLogger *slog.Logger, lifecycle cell.Lifecycle, tunnelConfig tunnel.Config) {
 	lifecycle.Append(cell.Hook{
 		OnStart: func(cell.HookContext) error {
-			if err := linuxdatapath.CheckRequirements(rootLogger); err != nil {
+			if err := linuxdatapath.CheckRequirements(rootLogger, tunnelConfig); err != nil {
 				return fmt.Errorf("requirements failed: %w", err)
 			}
 

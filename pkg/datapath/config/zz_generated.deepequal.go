@@ -133,6 +133,12 @@ func (in *Config) deepEqual(other *Config) bool {
 	if in.TunnelPort != other.TunnelPort {
 		return false
 	}
+	if in.TunnelSrcPortLow != other.TunnelSrcPortLow {
+		return false
+	}
+	if in.TunnelSrcPortHigh != other.TunnelSrcPortHigh {
+		return false
+	}
 	if in.EnableAutoDirectRouting != other.EnableAutoDirectRouting {
 		return false
 	}
