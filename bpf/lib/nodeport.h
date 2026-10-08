@@ -636,7 +636,7 @@ nodeport_extract_dsr_v6(struct __ctx_buff *ctx,
 #if defined(IS_BPF_OVERLAY)
 	{
 		struct geneve_dsr_opt6 gopt;
-		int ret = ctx_get_tunnel_opt(ctx, &gopt, sizeof(gopt));
+		int ret = geneve_get_tunnel_opt(ctx, &gopt, sizeof(gopt));
 
 		if (ret > 0) {
 			if (gopt.hdr.opt_class == bpf_htons(DSR_GENEVE_OPT_CLASS) &&
@@ -1953,7 +1953,7 @@ nodeport_extract_dsr_v4(struct __ctx_buff *ctx,
 		struct geneve_dsr_opt4 gopt;
 		int ret = 0;
 
-		ret = ctx_get_tunnel_opt(ctx, &gopt, sizeof(gopt));
+		ret = geneve_get_tunnel_opt(ctx, &gopt, sizeof(gopt));
 
 		if (ret > 0) {
 			if (gopt.hdr.opt_class == bpf_htons(DSR_GENEVE_OPT_CLASS) &&

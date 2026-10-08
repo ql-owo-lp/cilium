@@ -152,10 +152,16 @@ int tail_handle_snat_fwd_ipv6(struct __ctx_buff *ctx)
 	 * This can happen for egress gateway traffic that needs to egress from
 	 * the interface to which the egress IP is assigned to.
 	 */
-	if (ret == CTX_ACT_OK)
+	if (ret == CTX_ACT_OK) {
 		send_trace_notify6(ctx, NODEPORT_OBS_POINT_EGRESS, src_id, UNKNOWN_ID,
 				   saddr, TRACE_EP_ID_UNKNOWN, CONFIG(interface_ifindex),
 				   args->trace.reason, args->trace.monitor);
+
+		ret = geneve_overlay_egress_exit(ctx, ret, &ext_err);
+		if (IS_ERR(ret))
+			return send_drop_notify_error_ext(ctx, src_id, ret, ext_err,
+							  METRIC_EGRESS);
+	}
 
 	return ret;
 }
@@ -284,10 +290,16 @@ int tail_handle_nat_fwd_ipv6(struct __ctx_buff *ctx)
 	if (IS_ERR(ret))
 		return send_drop_notify_error_ext(ctx, src_id, ret, ext_err, METRIC_EGRESS);
 
-	if (ret == CTX_ACT_OK)
+	if (ret == CTX_ACT_OK) {
 		send_trace_notify(ctx, NODEPORT_OBS_POINT_EGRESS, src_id, UNKNOWN_ID,
 				  TRACE_EP_ID_UNKNOWN, CONFIG(interface_ifindex),
 				  trace.reason, trace.monitor, bpf_htons(ETH_P_IPV6));
+
+		ret = geneve_overlay_egress_exit(ctx, ret, &ext_err);
+		if (IS_ERR(ret))
+			return send_drop_notify_error_ext(ctx, src_id, ret, ext_err,
+							  METRIC_EGRESS);
+	}
 
 	return ret;
 }
@@ -472,10 +484,16 @@ int tail_handle_snat_fwd_ipv4(struct __ctx_buff *ctx)
 	 * This can happen for egress gateway traffic that needs to egress from
 	 * the interface to which the egress IP is assigned to.
 	 */
-	if (ret == CTX_ACT_OK)
+	if (ret == CTX_ACT_OK) {
 		send_trace_notify4(ctx, NODEPORT_OBS_POINT_EGRESS, src_id, UNKNOWN_ID,
 				   saddr, TRACE_EP_ID_UNKNOWN, CONFIG(interface_ifindex),
 				   trace.reason, trace.monitor);
+
+		ret = geneve_overlay_egress_exit(ctx, ret, &ext_err);
+		if (IS_ERR(ret))
+			return send_drop_notify_error_ext(ctx, src_id, ret, ext_err,
+							  METRIC_EGRESS);
+	}
 
 	return ret;
 }
@@ -612,10 +630,16 @@ int tail_handle_nat_fwd_ipv4(struct __ctx_buff *ctx)
 	if (IS_ERR(ret))
 		return send_drop_notify_error_ext(ctx, src_id, ret, ext_err, METRIC_EGRESS);
 
-	if (ret == CTX_ACT_OK)
+	if (ret == CTX_ACT_OK) {
 		send_trace_notify(ctx, NODEPORT_OBS_POINT_EGRESS, src_id, UNKNOWN_ID,
 				  TRACE_EP_ID_UNKNOWN, CONFIG(interface_ifindex),
 				  trace.reason, trace.monitor, bpf_htons(ETH_P_IP));
+
+		ret = geneve_overlay_egress_exit(ctx, ret, &ext_err);
+		if (IS_ERR(ret))
+			return send_drop_notify_error_ext(ctx, src_id, ret, ext_err,
+							  METRIC_EGRESS);
+	}
 
 	return ret;
 }

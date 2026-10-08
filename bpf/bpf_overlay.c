@@ -474,11 +474,12 @@ pass_to_stack:
 
 #endif /* ENABLE_IPV4 */
 
-/* Attached to the ingress of cilium_vxlan/cilium_geneve to execute on packets
- * entering the node via the tunnel.
+/* Shared body of cil_from_overlay and tail_geneve_from_overlay. @native
+ * selects where the tunnel key comes from: the kernel tunnel device, or the
+ * per-CPU ingress slot staged by bpf_host's native Geneve decapsulation.
  */
-__section_entry
-int cil_from_overlay(struct __ctx_buff *ctx)
+static __always_inline int
+handle_from_overlay(struct __ctx_buff *ctx, const bool native)
 {
 	__u32 src_sec_identity = 0;
 	__s8 ext_err = 0;
@@ -488,6 +489,15 @@ int cil_from_overlay(struct __ctx_buff *ctx)
 	bpf_clear_meta(ctx);
 	ctx_skip_nodeport_clear(ctx);
 	check_and_store_ip_trace_id(ctx);
+#ifdef ENABLE_BPF_GENEVE
+	/* Packets from the kernel tunnel device must never pick up a stale
+	 * ingress slot. For native packets the flag stays set until the
+	 * to-overlay path or a kernel-path entry clears it, since the
+	 * NodePort DSR code reads the TLVs from the slot later on.
+	 */
+	if (!native)
+		ctx_bpf_geneve_decap_clear(ctx);
+#endif
 
 	if (!validate_ethertype(ctx, &proto)) {
 		/* Pass unknown traffic to the stack */
@@ -526,9 +536,24 @@ int cil_from_overlay(struct __ctx_buff *ctx)
 	{
 		struct bpf_tunnel_key key = {};
 
-		ret = get_tunnel_key(ctx, &key);
-		if (unlikely(ret < 0))
-			goto out;
+#ifdef ENABLE_BPF_GENEVE
+		if (native) {
+			const struct geneve_metadata *meta;
+
+			meta = geneve_meta_slot(GENEVE_META_INGRESS);
+			if (!ctx_bpf_geneve_decap_is_set(ctx) || !meta ||
+			    meta->magic != GENEVE_META_MAGIC) {
+				ret = DROP_NO_TUNNEL_KEY;
+				goto out;
+			}
+			key.tunnel_id = meta->vni;
+		} else
+#endif
+		{
+			ret = get_tunnel_key(ctx, &key);
+			if (unlikely(ret < 0))
+				goto out;
+		}
 		cilium_dbg(ctx, DBG_DECAP, key.tunnel_id, key.tunnel_label);
 
 		src_sec_identity = get_id_from_tunnel_id(key.tunnel_id, proto);
@@ -550,8 +575,12 @@ int cil_from_overlay(struct __ctx_buff *ctx)
 		break;
 	}
 
+	/* Natively decapsulated packets report the tunnel device, like the
+	 * packets that are received on it.
+	 */
 	send_trace_notify(ctx, TRACE_FROM_OVERLAY, src_sec_identity, UNKNOWN_ID,
-			  TRACE_EP_ID_UNKNOWN, ctx->ingress_ifindex,
+			  TRACE_EP_ID_UNKNOWN,
+			  native ? ENCAP_IFINDEX : ctx->ingress_ifindex,
 			  TRACE_REASON_UNKNOWN, TRACE_PAYLOAD_LEN, proto);
 
 	switch (proto) {
@@ -590,11 +619,32 @@ out:
 	return ret;
 }
 
-/* Attached to the egress of cilium_vxlan/cilium_geneve to execute on packets
- * leaving the node via the tunnel.
+/* Attached to the ingress of cilium_vxlan/cilium_geneve to execute on packets
+ * entering the node via the tunnel.
  */
 __section_entry
-int cil_to_overlay(struct __ctx_buff *ctx)
+int cil_from_overlay(struct __ctx_buff *ctx)
+{
+	return handle_from_overlay(ctx, false);
+}
+
+#ifdef ENABLE_BPF_GENEVE
+/* Entered by tail call from bpf_host after native Geneve decapsulation. */
+__declare_tail_in(cilium_calls_bpf_overlay, GENEVE_CALL_FROM_OVERLAY)
+int tail_geneve_from_overlay(struct __ctx_buff *ctx)
+{
+	return handle_from_overlay(ctx, true);
+}
+#endif /* ENABLE_BPF_GENEVE */
+
+/* Shared body of cil_to_overlay and tail_geneve_to_overlay. @native selects
+ * where the tunnel key comes from: the kernel tunnel device, or the per-CPU
+ * egress slot staged by geneve_encap_and_redirect(). Native packets are
+ * marked so that geneve_overlay_egress_exit() encapsulates them when they
+ * leave the pipeline.
+ */
+static __always_inline int
+handle_to_overlay(struct __ctx_buff *ctx, const bool native __maybe_unused)
 {
 	bool snat_done __maybe_unused = ctx_snat_done(ctx);
 	struct trace_ctx __maybe_unused trace;
@@ -607,6 +657,14 @@ int cil_to_overlay(struct __ctx_buff *ctx)
 
 	bpf_clear_meta(ctx);
 	check_and_store_ip_trace_id(ctx);
+#ifdef ENABLE_BPF_GENEVE
+	/* A natively decapsulated packet that is forwarded back into the
+	 * tunnel is done with its ingress slot; and a packet on the kernel
+	 * path must not be mistaken for one awaiting native encapsulation.
+	 */
+	ctx_bpf_geneve_decap_clear(ctx);
+	ctx_bpf_geneve_encap_clear(ctx);
+#endif
 
 	/* Load the ethertype just once: */
 	validate_ethertype(ctx, &proto);
@@ -617,8 +675,17 @@ int cil_to_overlay(struct __ctx_buff *ctx)
 	 * (in queue_mapping) is overridden on tunnel xmit. Hence set the
 	 * timestamp already here. The tunnel dev has noqueue qdisc, so as
 	 * tradeoff it's close enough.
+	 *
+	 * Native packets do not pass the tunnel dev, so their aggregate
+	 * survives until cil_to_netdev on the phys dev, which sets the
+	 * timestamp as in native routing mode. One set here would be lost:
+	 * these packets mostly enter at tc ingress, where writing it clears
+	 * its delivery time type, so that skb_clear_tstamp() on the redirect
+	 * to the phys dev clears it (v6.18 net/core/filter.c L9612-9640,
+	 * L2224, L2325).
 	 */
-	ret = edt_sched_departure(ctx, proto);
+	if (!native)
+		ret = edt_sched_departure(ctx, proto);
 	/* No send_drop_notify_error() here given we're rate-limiting. */
 	if (ret < 0) {
 		update_metrics(ctx_full_len(ctx), METRIC_EGRESS, (__u8)-ret);
@@ -634,6 +701,20 @@ int cil_to_overlay(struct __ctx_buff *ctx)
 	cluster_id = ctx_get_cluster_id_mark(ctx);
 #endif
 
+#ifdef ENABLE_BPF_GENEVE
+	if (native) {
+		const struct geneve_metadata *meta;
+
+		meta = geneve_meta_slot(GENEVE_META_EGRESS);
+		if (!meta || meta->magic != GENEVE_META_MAGIC) {
+			ret = DROP_NO_TUNNEL_KEY;
+			goto drop;
+		}
+		src_sec_identity = get_id_from_tunnel_id(meta->vni,
+							 ctx_get_protocol(ctx));
+		ctx_bpf_geneve_encap_set(ctx);
+	} else
+#endif
 	/* We might see some unexpected packets without tunnel_key (eg. IPv6 ND).
 	 * No need to worry, the geneve/vxlan kernel drivers will drop them.
 	 */
@@ -652,10 +733,106 @@ int cil_to_overlay(struct __ctx_buff *ctx)
 	ret = handle_nat_fwd(ctx, cluster_id, src_sec_identity, proto, false, &trace, &ext_err);
 out:
 #endif
+	ret = geneve_overlay_egress_exit(ctx, ret, &ext_err);
+#ifdef ENABLE_BPF_GENEVE
+drop:
+#endif
 	if (IS_ERR(ret))
 		return send_drop_notify_error_ext(ctx, src_sec_identity, ret, ext_err,
 						  METRIC_EGRESS);
 	return ret;
 }
+
+#ifdef ENABLE_BPF_GENEVE
+/* Packets redirected here by geneve_encap_fallback() have completed the
+ * native to-overlay pipeline, so only the tunnel device has to send them.
+ * The exception is EDT, which handle_to_overlay() leaves to the phys dev for
+ * native packets: these take the tunnel dev after all, so as on the kernel
+ * path their timestamp is set here, while the aggregate is still in
+ * queue_mapping.
+ *
+ * The marker must be cleared here as it survives the redirect:
+ * skb_do_redirect() and __bpf_redirect() down to dev_queue_xmit() in
+ * __bpf_tx_skb() leave tc_index alone (v6.18 net/core/filter.c L2502-2534,
+ * L2138-2207), only TC_ACT_OK verdicts rewrite it (include/net/tcx.h
+ * L149-150, net/core/dev.c L4346-4348).
+ */
+static __always_inline int geneve_fallback_to_overlay(struct __ctx_buff *ctx)
+{
+	__be16 proto __maybe_unused = 0;
+	int ret __maybe_unused;
+
+	ctx_bpf_geneve_fallback_clear(ctx);
+
+#ifdef ENABLE_BANDWIDTH_MANAGER
+	validate_ethertype(ctx, &proto);
+	ret = edt_sched_departure(ctx, proto);
+	/* No send_drop_notify_error() here given we're rate-limiting. */
+	if (ret < 0) {
+		update_metrics(ctx_full_len(ctx), METRIC_EGRESS, (__u8)-ret);
+		return CTX_ACT_DROP;
+	}
+#endif
+	return CTX_ACT_OK;
+}
+#endif /* ENABLE_BPF_GENEVE */
+
+/* Attached to the egress of cilium_vxlan/cilium_geneve to execute on packets
+ * leaving the node via the tunnel.
+ */
+__section_entry
+int cil_to_overlay(struct __ctx_buff *ctx)
+{
+#ifdef ENABLE_BPF_GENEVE
+	if (ctx_bpf_geneve_fallback_is_set(ctx))
+		return geneve_fallback_to_overlay(ctx);
+#endif
+	return handle_to_overlay(ctx, false);
+}
+
+#ifdef ENABLE_BPF_GENEVE
+/* Entered by tail call from geneve_encap_and_redirect() in bpf_lxc, bpf_host
+ * or bpf_overlay itself.
+ */
+__declare_tail_in(cilium_calls_bpf_overlay, GENEVE_CALL_TO_OVERLAY)
+int tail_geneve_to_overlay(struct __ctx_buff *ctx)
+{
+	return handle_to_overlay(ctx, true);
+}
+
+/* Final step of the native egress path, entered from
+ * geneve_overlay_egress_exit(). The source identity for drop notifications
+ * comes from the mark set by handle_to_overlay().
+ */
+#ifdef ENABLE_IPV4
+__declare_tail(CILIUM_CALL_GENEVE_ENCAP4)
+int tail_geneve_encap4(struct __ctx_buff *ctx)
+{
+	__s8 ext_err = 0;
+	int ret;
+
+	ret = geneve_handle_encap4(ctx, &ext_err);
+	if (IS_ERR(ret))
+		return send_drop_notify_error_ext(ctx, get_identity(ctx), ret,
+						  ext_err, METRIC_EGRESS);
+	return ret;
+}
+#endif /* ENABLE_IPV4 */
+
+#ifdef ENABLE_IPV6
+__declare_tail(CILIUM_CALL_GENEVE_ENCAP6)
+int tail_geneve_encap6(struct __ctx_buff *ctx)
+{
+	__s8 ext_err = 0;
+	int ret;
+
+	ret = geneve_handle_encap6(ctx, &ext_err);
+	if (IS_ERR(ret))
+		return send_drop_notify_error_ext(ctx, get_identity(ctx), ret,
+						  ext_err, METRIC_EGRESS);
+	return ret;
+}
+#endif /* ENABLE_IPV6 */
+#endif /* ENABLE_BPF_GENEVE */
 
 BPF_LICENSE("Dual BSD/GPL");

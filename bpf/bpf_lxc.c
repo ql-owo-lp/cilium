@@ -1270,16 +1270,17 @@ ipv4_forward_to_destination(struct __ctx_buff *ctx, struct iphdr *ip4,
 #endif
 
 		if (info && info->flag_has_tunnel_ep) {
-			ret = encap_and_redirect_lxc(ctx, info, SECLABEL_IPV4,
-						     dst_sec_identity, trace,
-						     bpf_htons(ETH_P_IP));
-
 #ifdef ENABLE_CLUSTER_AWARE_ADDRESSING
-			if (ret == CTX_ACT_REDIRECT)
-				ctx_set_cluster_id_mark(ctx, cluster_id);
+			/* Set the mark before encap_and_redirect_lxc(): with
+			 * ENABLE_BPF_GENEVE it tail calls into bpf_overlay,
+			 * which reads the mark, and does not return on
+			 * success. On error the packet is dropped.
+			 */
+			ctx_set_cluster_id_mark(ctx, cluster_id);
 #endif
-
-			return ret;
+			return encap_and_redirect_lxc(ctx, info, SECLABEL_IPV4,
+						      dst_sec_identity, trace,
+						      bpf_htons(ETH_P_IP));
 		}
 	}
 #endif /* TUNNEL_MODE */

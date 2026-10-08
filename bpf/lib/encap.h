@@ -14,8 +14,11 @@
 #define ENCAP_IFINDEX 0
 #endif
 
+#include "geneve_encap.h"
+
 static __always_inline int
-__encap_with_nodeid(struct __ctx_buff *ctx, __u32 src_ip, __be16 src_port,
+__encap_with_nodeid(struct __ctx_buff *ctx, __u32 src_ip __maybe_unused,
+		    __be16 src_port __maybe_unused,
 		    const struct remote_endpoint_info *info, __u32 seclabel,
 		    __u32 dstid, __u32 vni, void *opt, __u32 opt_len,
 		    enum trace_reason ct_reason, __u32 monitor, int *ifindex,
@@ -37,6 +40,14 @@ __encap_with_nodeid(struct __ctx_buff *ctx, __u32 src_ip, __be16 src_port,
 	send_trace_notify(ctx, TRACE_TO_OVERLAY, seclabel, dstid, TRACE_EP_ID_UNKNOWN,
 			  *ifindex, ct_reason, monitor, proto);
 
+#if defined(ENABLE_BPF_GENEVE) && __ctx_is == __ctx_skb
+	/* Native datapath: the packet is handed to bpf_overlay by tail call
+	 * instead of being redirected to the tunnel device, so this never
+	 * returns CTX_ACT_REDIRECT. The outer source address and port are
+	 * chosen when the packet is encapsulated.
+	 */
+	return geneve_encap_and_redirect(ctx, info, seclabel, vni, opt, opt_len);
+#else
 	if (info->flag_ipv6_tunnel_ep)
 		return ctx_set_encap_info6(ctx, &info->tunnel_endpoint.ip6,
 					   seclabel, opt, opt_len);
@@ -46,6 +57,7 @@ __encap_with_nodeid(struct __ctx_buff *ctx, __u32 src_ip, __be16 src_port,
 	return ctx_set_encap_info4(ctx, src_ip, src_port,
 				   info->tunnel_endpoint.ip4.be32,
 				   seclabel, vni, opt, opt_len);
+#endif
 }
 
 static __always_inline int

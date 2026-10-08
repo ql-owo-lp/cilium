@@ -1156,6 +1156,15 @@ do_netdev(struct __ctx_buff *ctx, __be16 proto, __u32 identity,
 		send_trace_notify(ctx, obs_point, identity, UNKNOWN_ID, TRACE_EP_ID_UNKNOWN,
 				  ctx->ingress_ifindex, trace.reason, trace.monitor, proto);
 
+#ifdef ENABLE_BPF_GENEVE
+		/* See the IPv4 sibling block below. */
+		if (!from_host && geneve_is_native_ingress6(ctx, ip6)) {
+			ret = tail_call_internal(ctx, CILIUM_CALL_GENEVE_DECAP6, &ext_err);
+			return send_drop_notify_error_with_exitcode_ext(ctx, identity, ret, ext_err,
+									CTX_ACT_OK, METRIC_INGRESS);
+		}
+#endif /* ENABLE_BPF_GENEVE */
+
 		ret = tail_call_internal(ctx, from_host ? CILIUM_CALL_IPV6_FROM_HOST :
 							  CILIUM_CALL_IPV6_FROM_NETDEV,
 					 &ext_err);
@@ -1250,6 +1259,22 @@ do_netdev(struct __ctx_buff *ctx, __be16 proto, __u32 identity,
 		send_trace_notify(ctx, obs_point, identity, UNKNOWN_ID, TRACE_EP_ID_UNKNOWN,
 				  ctx->ingress_ifindex, trace.reason, trace.monitor, proto);
 
+#ifdef ENABLE_BPF_GENEVE
+		/* Geneve packets addressed to this node are decapsulated by
+		 * tail_geneve_decap4() and handed to bpf_overlay directly
+		 * instead of being passed up to the kernel tunnel device.
+		 * The trace above and CB_SRC_LABEL describe the outer packet,
+		 * as they do on the kernel path. Anything the native datapath
+		 * does not handle (fragments, IP options, ...) continues on
+		 * the regular path and is still decapsulated by the kernel.
+		 */
+		if (!from_host && geneve_is_native_ingress4(ctx, ip4)) {
+			ret = tail_call_internal(ctx, CILIUM_CALL_GENEVE_DECAP4, &ext_err);
+			return send_drop_notify_error_with_exitcode_ext(ctx, identity, ret, ext_err,
+									CTX_ACT_OK, METRIC_INGRESS);
+		}
+#endif /* ENABLE_BPF_GENEVE */
+
 		ret = tail_call_internal(ctx, from_host ? CILIUM_CALL_IPV4_FROM_HOST :
 							  CILIUM_CALL_IPV4_FROM_NETDEV,
 					 &ext_err);
@@ -1299,6 +1324,119 @@ drop_err_egress: __maybe_unused
 drop_err_ingress: __maybe_unused
 	return send_drop_notify_error(ctx, identity, ret, dir);
 }
+
+#ifdef ENABLE_BPF_GENEVE
+/* Native Geneve ingress, entered from do_netdev() for Geneve packets
+ * addressed to this node. The packet is still encapsulated at this point.
+ *
+ * On the kernel path, the outer packet runs through handle_ipv4/6() before
+ * the tunnel device decapsulates it, which enforces host firewall ingress
+ * policy on it. Do the same here so that enabling the native datapath does
+ * not change which tunnel packets a node accepts. NodePort service lookup
+ * on the outer header is intentionally skipped: no service is ever exposed
+ * on the tunnel port.
+ *
+ * After decapsulation the inner packet is handed to bpf_overlay through the
+ * pinned cilium_calls_bpf_overlay prog array, where tail_geneve_from_overlay
+ * processes it exactly like a packet from the kernel tunnel device, taking
+ * the tunnel key from the per-CPU ingress slot instead.
+ *
+ * Unlike such a packet, it is not received again on the tunnel device: its
+ * skb->dev and ingress ifindex remain the underlay device's. Verdicts that
+ * redirect the packet are not affected, but these pass it to the stack:
+ *  - the L7 ingress proxy: ctx_redirect_to_proxy4/6() in bpf_lxc's
+ *    tail_ipv4/ipv6_policy(), and the L7 load balancer and punt-to-proxy
+ *    services in nodeport_lb4/6();
+ *  - legacy host routing: local_delivery() with endpoint routes and without
+ *    ENABLE_NODEPORT, and tail_ipv4/ipv6_policy() without ENABLE_ROUTING
+ *    and ENABLE_NODEPORT;
+ *  - Geneve DSR without BPF host routing (handle_ipv4/6() in bpf_overlay).
+ * For those packets the IPv4 reverse path filter (v6.18 net/ipv4/route.c
+ * L1833, L2373-2378), iptables -i (net/ipv4/ip_input.c L573-575,
+ * net/ipv6/ip6_input.c L311-313) and `ip rule iif` (net/ipv4/route.c L2338,
+ * net/ipv6/route.c L2622) match on the underlay device instead of the
+ * tunnel device. A strict rp_filter there would drop them, since the routes
+ * to remote pods point to cilium_host; the agent therefore switches it to
+ * loose mode on the native devices when the native datapath is enabled.
+ */
+#ifdef ENABLE_IPV4
+__declare_tail(CILIUM_CALL_GENEVE_DECAP4)
+int tail_geneve_decap4(struct __ctx_buff *ctx)
+{
+	__u32 src_sec_identity = ctx_load_and_clear_meta(ctx, CB_SRC_LABEL);
+	int ret;
+
+#ifdef ENABLE_HOST_FIREWALL
+	struct trace_ctx trace = {
+		.reason = TRACE_REASON_UNKNOWN,
+		.monitor = 0,
+	};
+	__s8 ext_err = 0;
+
+	ret = ipv4_host_policy_ingress(ctx, &src_sec_identity, &trace, &ext_err);
+	if (IS_ERR(ret))
+		return send_drop_notify_error_ext(ctx, src_sec_identity, ret, ext_err,
+						  METRIC_INGRESS);
+	if (ret != CTX_ACT_OK)
+		return ret;
+#endif /* ENABLE_HOST_FIREWALL */
+
+	ret = geneve_decap4(ctx);
+	if (IS_ERR(ret))
+		return send_drop_notify_error(ctx, src_sec_identity, ret, METRIC_INGRESS);
+
+	ctx_bpf_geneve_decap_set(ctx);
+	tail_call_static(ctx, cilium_calls_bpf_overlay, GENEVE_CALL_FROM_OVERLAY);
+	{
+		struct geneve_metadata *meta = geneve_meta_slot(GENEVE_META_INGRESS);
+
+		if (meta)
+			meta->magic = 0;
+	}
+	return send_drop_notify_error_ext(ctx, src_sec_identity, DROP_MISSED_TAIL_CALL,
+					  GENEVE_CALL_FROM_OVERLAY, METRIC_INGRESS);
+}
+#endif /* ENABLE_IPV4 */
+
+#ifdef ENABLE_IPV6
+__declare_tail(CILIUM_CALL_GENEVE_DECAP6)
+int tail_geneve_decap6(struct __ctx_buff *ctx)
+{
+	__u32 src_sec_identity = ctx_load_and_clear_meta(ctx, CB_SRC_LABEL);
+	int ret;
+
+#ifdef ENABLE_HOST_FIREWALL
+	struct trace_ctx trace = {
+		.reason = TRACE_REASON_UNKNOWN,
+		.monitor = 0,
+	};
+	__s8 ext_err = 0;
+
+	ret = ipv6_host_policy_ingress(ctx, &src_sec_identity, &trace, &ext_err);
+	if (IS_ERR(ret))
+		return send_drop_notify_error_ext(ctx, src_sec_identity, ret, ext_err,
+						  METRIC_INGRESS);
+	if (ret != CTX_ACT_OK)
+		return ret;
+#endif /* ENABLE_HOST_FIREWALL */
+
+	ret = geneve_decap6(ctx);
+	if (IS_ERR(ret))
+		return send_drop_notify_error(ctx, src_sec_identity, ret, METRIC_INGRESS);
+
+	ctx_bpf_geneve_decap_set(ctx);
+	tail_call_static(ctx, cilium_calls_bpf_overlay, GENEVE_CALL_FROM_OVERLAY);
+	{
+		struct geneve_metadata *meta = geneve_meta_slot(GENEVE_META_INGRESS);
+
+		if (meta)
+			meta->magic = 0;
+	}
+	return send_drop_notify_error_ext(ctx, src_sec_identity, DROP_MISSED_TAIL_CALL,
+					  GENEVE_CALL_FROM_OVERLAY, METRIC_INGRESS);
+}
+#endif /* ENABLE_IPV6 */
+#endif /* ENABLE_BPF_GENEVE */
 
 /*
  * from-netdev is attached as a tc ingress filter to one or more physical devices
