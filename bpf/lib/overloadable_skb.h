@@ -105,6 +105,62 @@ ctx_skip_nodeport(struct __sk_buff *ctx __maybe_unused)
 #endif
 }
 
+#ifdef ENABLE_BPF_GENEVE
+static __always_inline __maybe_unused void
+ctx_bpf_geneve_decap_set(struct __sk_buff *ctx)
+{
+	ctx->tc_index |= TC_INDEX_F_BPF_GENEVE_DECAP;
+}
+
+static __always_inline __maybe_unused void
+ctx_bpf_geneve_decap_clear(struct __sk_buff *ctx)
+{
+	ctx->tc_index &= ~TC_INDEX_F_BPF_GENEVE_DECAP;
+}
+
+static __always_inline __maybe_unused bool
+ctx_bpf_geneve_decap_is_set(const struct __sk_buff *ctx)
+{
+	return ctx->tc_index & TC_INDEX_F_BPF_GENEVE_DECAP;
+}
+
+static __always_inline __maybe_unused void
+ctx_bpf_geneve_encap_set(struct __sk_buff *ctx)
+{
+	ctx->tc_index |= TC_INDEX_F_BPF_GENEVE_ENCAP;
+}
+
+static __always_inline __maybe_unused void
+ctx_bpf_geneve_encap_clear(struct __sk_buff *ctx)
+{
+	ctx->tc_index &= ~TC_INDEX_F_BPF_GENEVE_ENCAP;
+}
+
+static __always_inline __maybe_unused bool
+ctx_bpf_geneve_encap_is_set(const struct __sk_buff *ctx)
+{
+	return ctx->tc_index & TC_INDEX_F_BPF_GENEVE_ENCAP;
+}
+
+static __always_inline __maybe_unused void
+ctx_bpf_geneve_fallback_set(struct __sk_buff *ctx)
+{
+	ctx->tc_index |= TC_INDEX_F_BPF_GENEVE_FALLBACK;
+}
+
+static __always_inline __maybe_unused void
+ctx_bpf_geneve_fallback_clear(struct __sk_buff *ctx)
+{
+	ctx->tc_index &= ~TC_INDEX_F_BPF_GENEVE_FALLBACK;
+}
+
+static __always_inline __maybe_unused bool
+ctx_bpf_geneve_fallback_is_set(const struct __sk_buff *ctx)
+{
+	return ctx->tc_index & TC_INDEX_F_BPF_GENEVE_FALLBACK;
+}
+#endif /* ENABLE_BPF_GENEVE */
+
 static __always_inline __maybe_unused __u32 ctx_get_xfer(struct __sk_buff *ctx,
 							 __u32 off)
 {

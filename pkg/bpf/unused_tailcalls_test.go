@@ -62,3 +62,30 @@ func TestRemoveUnusedTailcalls(t *testing.T) {
 	assert.NotContains(t, cpy.Programs, "d")
 	assert.Contains(t, cpy.Programs, "e")
 }
+
+// Tail calls declared in a program array other than cilium_calls can be
+// invoked from other objects, so they and their callees must survive pruning.
+func TestRemoveUnusedTailcallsSharedMap(t *testing.T) {
+	logger := hivetest.Logger(t)
+	spec, err := ebpf.LoadCollectionSpec("testdata/external-tailcall.o")
+	require.NoError(t, err)
+
+	assert.Contains(t, spec.Programs, "cil_entry")
+	assert.Contains(t, spec.Programs, "shared_a")
+	assert.Contains(t, spec.Programs, "a")
+	assert.Contains(t, spec.Programs, "b")
+	assert.Contains(t, spec.Programs, "c")
+
+	reach, err := computeReachability(spec)
+	require.NoError(t, err)
+	require.NoError(t, removeUnusedTailcalls(spec, reach, logger))
+
+	assert.Contains(t, spec.Programs, "cil_entry")
+	// Declared in shared_calls, never called from this object.
+	assert.Contains(t, spec.Programs, "shared_a")
+	// Only tail called from shared_a.
+	assert.Contains(t, spec.Programs, "b")
+	assert.Contains(t, spec.Programs, "a")
+	// Unreachable from both the entrypoint and shared_a.
+	assert.NotContains(t, spec.Programs, "c")
+}

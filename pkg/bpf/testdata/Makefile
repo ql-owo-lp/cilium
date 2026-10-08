@@ -10,6 +10,7 @@ UIDGID := $(shell stat -c '%u:%g' ${ROOT_DIR})
 TARGETS := \
 	reachability \
 	unreachable-tailcall \
+	external-tailcall \
 	upgrade-map \
 	unused-map-pruning \
 	unused-map-false-negative

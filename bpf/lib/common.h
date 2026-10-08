@@ -234,6 +234,26 @@ enum metric_dir {
 #define TC_INDEX_F_FROM_EGRESS_PROXY	2
 #define TC_INDEX_F_SKIP_NODEPORT	4
 #define TC_INDEX_F_SKIP_HEALTH_CHECK	8
+/* Native (BPF) Geneve datapath, see lib/geneve_encap.h:
+ *
+ * TC_INDEX_F_BPF_GENEVE_DECAP marks an skb that bpf_host decapsulated and
+ * whose tunnel key is staged in the per-CPU ingress metadata slot. It is
+ * consumed by tail_geneve_from_overlay (bpf_overlay).
+ *
+ * TC_INDEX_F_BPF_GENEVE_ENCAP marks an skb that entered the to-overlay
+ * pipeline through tail_geneve_to_overlay and still needs to be encapsulated
+ * by tail_geneve_encap4/6 before it may leave the pipeline.
+ *
+ * TC_INDEX_F_BPF_GENEVE_FALLBACK marks an skb that completed the to-overlay
+ * pipeline and was then redirected to the kernel tunnel device instead of
+ * being encapsulated natively; cil_to_overlay passes it on unprocessed. It is
+ * set in a single place, right before that redirect. (The ENCAP flag cannot
+ * serve this purpose: packets keep it when the pipeline redirects them
+ * elsewhere.)
+ */
+#define TC_INDEX_F_BPF_GENEVE_DECAP	16
+#define TC_INDEX_F_BPF_GENEVE_ENCAP	32
+#define TC_INDEX_F_BPF_GENEVE_FALLBACK	64
 
 #define CB_DELIVERY_FLAGS_REDIRECT		(1 << 0)
 #define CB_DELIVERY_FLAGS_FROM_HOST		(1 << 1)

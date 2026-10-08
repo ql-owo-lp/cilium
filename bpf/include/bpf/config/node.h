@@ -157,6 +157,11 @@ NODE_CONFIG(union v4addr, ipv4_direct_routing,
 NODE_CONFIG(union v6addr, ipv6_direct_routing,
 	    "IPv6 address of the device used for direct routing between nodes")
 
+NODE_CONFIG(__u16, tunnel_src_port_low,
+	    "Lowest UDP source port for BPF Geneve encapsulation (low = high = 0 selects 1-65535)")
+NODE_CONFIG(__u16, tunnel_src_port_high,
+	    "Highest UDP source port for BPF Geneve encapsulation (low = high = 0 selects 1-65535)")
+
 struct ipv4_snat_exclusion_prefix {
 	union v4addr dst_addr;
 	__u8 bits;

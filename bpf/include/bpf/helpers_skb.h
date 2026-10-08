@@ -31,6 +31,7 @@ static int BPF_FUNC(l3_csum_replace, struct __sk_buff *skb, __u32 off,
 		    __u32 from, __u32 to, __u32 flags);
 static int BPF_FUNC(l4_csum_replace, struct __sk_buff *skb, __u32 off,
 		    __u32 from, __u32 to, __u32 flags);
+static int BPF_FUNC(csum_level, struct __sk_buff *skb, __u64 level);
 
 static int BPF_FUNC(skb_adjust_room, struct __sk_buff *skb, __s32 len_diff,
 		    __u32 mode, __u64 flags);
@@ -44,6 +45,8 @@ static int BPF_FUNC(skb_change_head, struct __sk_buff *skb, __u32 head_room,
 		    __u64 flags);
 
 static int BPF_FUNC(skb_pull_data, const struct __sk_buff *skb, __u32 len);
+
+static int BPF_FUNC(skb_vlan_pop, struct __sk_buff *skb);
 
 /* Packet tunnel encap/decap */
 static int BPF_FUNC(skb_get_tunnel_key, struct __sk_buff *skb,

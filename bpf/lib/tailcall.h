@@ -69,7 +69,11 @@
 #define CILIUM_CALL_MULTICAST_EP_DELIVERY		47
 #define CILIUM_CALL_IPV4_POLICY_DENIED			48
 #define CILIUM_CALL_IPV6_POLICY_DENIED			49
-#define CILIUM_CALL_SIZE				50
+#define CILIUM_CALL_GENEVE_ENCAP4			50
+#define CILIUM_CALL_GENEVE_ENCAP6			51
+#define CILIUM_CALL_GENEVE_DECAP4			52
+#define CILIUM_CALL_GENEVE_DECAP6			53
+#define CILIUM_CALL_SIZE				54
 
 /* Private per-EP map for internal tail calls. Its bpffs pin is replaced every
  * time the BPF object is loaded. An existing pinned map is never reused.
@@ -89,13 +93,21 @@ struct {
  * The agent will automatically insert the tail call into cilium_calls when
  * the object is loaded. This annotation marks the function for elimination
  * when it's never called by tail_call_static.
+ *
+ * __declare_tail_in() does the same for an arbitrary prog array map. Use it
+ * for programs that are entered from a different BPF object through a pinned
+ * prog array (e.g. cilium_calls_bpf_overlay); such programs are never
+ * referenced by a tail_call_static in their own object, so the agent treats
+ * them as live roots instead of pruning them.
  */
 #if !defined(PROG_TYPE)
 	#error "Include bpf/ctx/skb.h or bpf/ctx/xdp.h before tailcall.h!"
 #endif
-#define __declare_tail(index) \
+#define __declare_tail_in(map, index) \
 	__section(PROG_TYPE "/tail") \
-	__attribute__((btf_decl_tag("tail:cilium_calls/" __stringify(index))))
+	__attribute__((btf_decl_tag("tail:" __stringify(map) "/" __stringify(index))))
+
+#define __declare_tail(index) __declare_tail_in(cilium_calls, index)
 
 static __always_inline __must_check int
 tail_call_internal(struct __ctx_buff *ctx, const __u32 index, __s8 *ext_err)

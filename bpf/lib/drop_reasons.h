@@ -88,3 +88,6 @@
 #define DROP_PUNT_PROXY		-205 /* Mapped as drop code, though drop not necessary. */
 /* -206 (DROP_NO_DEVICE) was retired and never released; do not reuse. */
 #define DROP_FRAG_NOT_FOUND_WORLD	-207
+#define DROP_GENEVE_HDR_INVALID	-208
+#define DROP_GENEVE_OPT_INVALID	-209
+#define DROP_GENEVE_ENCAP_FAILED	-210

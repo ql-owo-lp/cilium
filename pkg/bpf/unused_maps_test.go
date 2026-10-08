@@ -10,6 +10,7 @@ import (
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/asm"
+	"github.com/cilium/hive/hivetest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -129,4 +130,32 @@ func TestUnusedMapsFixedSet(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.True(t, orig.Equal(fixed))
+}
+
+// A program array populated by resolveTailCalls must not be pruned, even if
+// no instruction in the object references it, since its programs are tail
+// called from other objects.
+func TestUnusedMapsKeepPopulatedProgramArray(t *testing.T) {
+	logger := hivetest.Logger(t)
+	spec, err := ebpf.LoadCollectionSpec("testdata/external-tailcall.o")
+	require.NoError(t, err)
+
+	// Without tail call resolution, nothing references shared_calls.
+	cpy := spec.Copy()
+	reach, err := computeReachability(cpy)
+	require.NoError(t, err)
+	require.NoError(t, removeUnusedTailcalls(cpy, reach, logger))
+	assert.False(t, fixedResources(cpy).Has("shared_calls"))
+	require.NoError(t, removeUnusedMaps(cpy, fixedResources(cpy), reach, nil))
+	assert.Nil(t, cpy.Maps["shared_calls"])
+
+	reach, err = computeReachability(spec)
+	require.NoError(t, err)
+	require.NoError(t, removeUnusedTailcalls(spec, reach, logger))
+	require.NoError(t, resolveTailCalls(spec))
+	fixed := fixedResources(spec)
+	assert.True(t, fixed.Has("shared_calls"))
+	require.NoError(t, removeUnusedMaps(spec, fixed, reach, nil))
+	assert.NotNil(t, spec.Maps["shared_calls"])
+	assert.NotNil(t, spec.Maps[callsMap])
 }

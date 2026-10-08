@@ -38,17 +38,25 @@ func fixedResources(spec *ebpf.CollectionSpec, opts ...*set.Set[string]) *set.Se
 		fixed.Insert(v.SectionName)
 	}
 
-	// When populating a map-in-map with contents (other maps) defined at
-	// compile time, we need to ensure the inner maps are not pruned
-	// since they will not be directly referenced in the code.
-	for _, m := range spec.Maps {
-		if m.Type != ebpf.ArrayOfMaps && m.Type != ebpf.HashOfMaps {
-			continue
-		}
-
-		for _, c := range m.Contents {
-			if inner, ok := c.Value.(string); ok {
-				fixed.Insert(inner)
+	for name, m := range spec.Maps {
+		switch m.Type {
+		case ebpf.ArrayOfMaps, ebpf.HashOfMaps:
+			// When populating a map-in-map with contents (other maps) defined at
+			// compile time, we need to ensure the inner maps are not pruned
+			// since they will not be directly referenced in the code.
+			for _, c := range m.Contents {
+				if inner, ok := c.Value.(string); ok {
+					fixed.Insert(inner)
+				}
+			}
+		case ebpf.ProgramArray:
+			// A program array populated by resolveTailCalls holds programs that
+			// are live, but the array itself is not necessarily referenced by
+			// this object: a shared program array (see __declare_tail_in()) is
+			// only tail called into from other objects. Keep it, or the
+			// programs would be loaded without ever being inserted into it.
+			if len(m.Contents) > 0 {
+				fixed.Insert(name)
 			}
 		}
 	}
