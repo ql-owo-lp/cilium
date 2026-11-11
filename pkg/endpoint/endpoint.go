@@ -288,6 +288,11 @@ type Endpoint struct {
 	// sure that restores when DNS policy is in there are correct
 	dnsHistoryTrigger atomic.Pointer[trigger.Trigger]
 
+	// pendingHeaderSync records whether SyncEndpointHeaderFile was called
+	// before dnsHistoryTrigger was initialized so it can be triggered once
+	// initialization completes.
+	pendingHeaderSync atomic.Bool
+
 	// state is the state the endpoint is in. See setState()
 	state State
 
@@ -700,6 +705,9 @@ func (e *Endpoint) initDNSHistoryTrigger() {
 		return
 	}
 	e.dnsHistoryTrigger.Store(trigger)
+	if e.pendingHeaderSync.Swap(false) {
+		trigger.TriggerWithReason("SyncEndpointDNSState")
+	}
 }
 
 // CreateIngressEndpoint creates the endpoint corresponding to Cilium Ingress.
@@ -2713,7 +2721,10 @@ func (e *Endpoint) syncEndpointHeaderFile(reasons []string) {
 	// critical section, we must _not_ hold endpoint.mutex while calling
 	// GetDNSRules, to avoid a deadlock between IPCache and the endpoint. It is
 	// okay to hold endpoint.buildMutex, however.
-	rules := e.dnsRulesAPI.GetDNSRules(e.ID)
+	var rules restore.DNSRules
+	if e.dnsRulesAPI != nil {
+		rules = e.dnsRulesAPI.GetDNSRules(e.ID)
+	}
 
 	if err := e.lockAlive(); err != nil {
 		// endpoint was removed in the meanwhile, return
@@ -2742,6 +2753,11 @@ func (e *Endpoint) syncEndpointHeaderFile(reasons []string) {
 // file. This includes updating the current DNS History information.
 func (e *Endpoint) SyncEndpointHeaderFile() {
 	if trigger := e.dnsHistoryTrigger.Load(); trigger != nil {
+		trigger.TriggerWithReason("SyncEndpointDNSState")
+		return
+	}
+	e.pendingHeaderSync.Store(true)
+	if trigger := e.dnsHistoryTrigger.Load(); trigger != nil && e.pendingHeaderSync.Swap(false) {
 		trigger.TriggerWithReason("SyncEndpointDNSState")
 	}
 }
